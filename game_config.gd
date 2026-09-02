@@ -1,0 +1,51 @@
+extends RefCounted
+
+const BOARD_RADIUS := 10
+const PLAYER_HQ := Vector2i(-8, 0)
+const AI_HQ := Vector2i(8, 0)
+
+const RANDOM_TILE_TYPE := 0
+const BARRACKS_10_TILE_TYPE := 1
+const BARRACKS_50_TILE_TYPE := 2
+const RANDOM_TILE_TYPE_WEIGHT := 0.60
+const BARRACKS_10_TILE_TYPE_WEIGHT := 0.30
+const RANDOM_TILE_COST := 5
+const BARRACKS_10_TILE_COST := 10
+const BARRACKS_50_TILE_COST := 50
+const INITIAL_GOLD := 0.0
+const BASE_GOLD_INCOME := 5.0
+const GOLD_INCOME_INTERVAL := 5.0
+
+const UNIT_CLASS_TANK := 0
+const UNIT_CLASS_WARRIOR := 1
+const UNIT_CLASS_MAGE := 2
+const UNIT_CLASS_ASSASSIN := 3
+const UNIT_CLASS_ARCHER := 4
+const UNIT_CLASS_COUNT := 5
+const UNIT_CLASS_NAMES := ["坦克", "战士", "法师", "刺客", "弓箭手"]
+const UNIT_CLASS_SHORT_NAMES := ["坦", "战", "法", "刺", "弓"]
+const UNIT_CLASS_BASE_HP := [80.0, 50.0, 35.0, 25.0, 24.0]
+const UNIT_CLASS_BASE_ATTACK := [8.0, 10.0, 25.0, 18.0, 7.0]
+const UNIT_CLASS_ATTACK_INTERVAL := [3.5, 3.0, 4.5, 2.2, 1.5]
+const UNIT_CLASS_ATTACK_RANGE := [0.2, 0.2, 2.0, 0.2, 2.0]
+const UNIT_CLASS_IS_RANGED := [false, false, true, false, true]
+
+const HQ_MAX_HP := 300.0
+const BARRACKS_BASE_HP := 100.0
+const MINE_MAX_HP := 200.0
+const TOWER_MAX_HP := 200.0
+const BARRACKS_PRODUCTION_INTERVAL := 10.0
+const BARRACKS_DETECTION_RANGE := 5
+const HQ_DETECTION_RANGE := 5
+
+const UNIT_BASE_ATTACK := 10.0
+const UNIT_BASE_MOVE_SPEED := 36.0
+const UNIT_LEVEL_MOVE_INCREMENT := 2.0
+const UNIT_SPEED_SCALE := 0.5
+
+const INITIAL_CAMERA_ZOOM := 0.85
+const MIN_CAMERA_ZOOM := 0.30
+const MAX_CAMERA_ZOOM := 1.20
+const PORTRAIT_VIEWPORT_WIDTH := 720
+const PORTRAIT_VIEWPORT_HEIGHT := 1280
+const CAMERA_MAP_PADDING := 80.0

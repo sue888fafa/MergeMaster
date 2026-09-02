@@ -1,0 +1,8 @@
+.godot/
+
+# Local editor and OS files
+.DS_Store
+Thumbs.db
+
+# Godot local user data
+*.tmp
