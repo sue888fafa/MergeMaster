@@ -11,14 +11,19 @@ const HQ_MAX_HP := Config.HQ_MAX_HP
 
 var board: HexBoard
 var main_ref: Node
+var redraw_timer := 0.0
+const REDRAW_INTERVAL := 1.0 / 30.0
 
 func setup(next_board: HexBoard) -> void:
 	board = next_board
 	main_ref = get_parent()
 	queue_redraw()
 
-func _process(_delta: float) -> void:
-	queue_redraw()
+func _process(delta: float) -> void:
+	redraw_timer -= delta
+	if redraw_timer <= 0.0:
+		redraw_timer = REDRAW_INTERVAL
+		queue_redraw()
 
 func _draw() -> void:
 	if board == null:
@@ -31,6 +36,8 @@ func _draw() -> void:
 			continue
 		var building: int = int(tile["building"])
 		var center := board.axial_to_world(cell)
+		if building == BARRACKS:
+			center += board.get_barracks_merge_offset(cell)
 		if cell == Config.PLAYER_HQ or cell == Config.AI_HQ:
 			_draw_hq_health(cell, center)
 			continue
@@ -41,8 +48,14 @@ func _draw() -> void:
 		if building == BARRACKS:
 			var progress := board.get_build_timer(cell)
 			var progress_ratio := clampf(1.0 - progress / BARRACKS_PRODUCTION_INTERVAL, 0.0, 1.0)
-			draw_rect(Rect2(center + Vector2(-15, 25), Vector2(30, 3)), Color("#0f172a"), true)
-			draw_rect(Rect2(center + Vector2(-15, 25), Vector2(30.0 * progress_ratio, 3)), owner_color, true)
+			_draw_barracks_production_progress(center, progress_ratio, owner_color)
+
+func _draw_barracks_production_progress(center: Vector2, progress_ratio: float, owner_color: Color) -> void:
+	var ring_center := center + Vector2(0.0, 1.0)
+	var ring_radius := 14.0
+	draw_arc(ring_center, ring_radius, 0.0, TAU, 24, Color(0.03, 0.07, 0.13, 0.78), 2.0, true)
+	if progress_ratio > 0.0:
+		draw_arc(ring_center, ring_radius, -PI * 0.5, -PI * 0.5 + TAU * progress_ratio, 24, owner_color, 2.0, true)
 
 func _draw_building_health(center: Vector2, tile: Dictionary) -> void:
 	var max_hp: float = float(tile["building_max_hp"])
@@ -61,5 +74,5 @@ func _draw_hq_health(cell: Vector2i, center: Vector2) -> void:
 	if hp >= HQ_MAX_HP:
 		return
 	var ratio := clampf(hp / HQ_MAX_HP, 0.0, 1.0)
-	draw_rect(Rect2(center + Vector2(-18, -28), Vector2(36, 4)), Color("#0f172a"), true)
-	draw_rect(Rect2(center + Vector2(-18, -28), Vector2(36.0 * ratio, 4)), Color("#f87171"), true)
+	draw_rect(Rect2(center + Vector2(-18, -53), Vector2(36, 4)), Color("#0f172a"), true)
+	draw_rect(Rect2(center + Vector2(-18, -53), Vector2(36.0 * ratio, 4)), Color("#f87171"), true)

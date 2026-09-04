@@ -1,6 +1,6 @@
 extends Node2D
 
-var target: BattleUnit
+var target: Node2D
 var target_cell := Vector2i(999, 999)
 var target_is_building := false
 var target_faction := 0
@@ -8,8 +8,9 @@ var main_ref: Node
 var damage := 0.0
 var speed := 360.0
 var previous_position := Vector2.ZERO
+var source_unit: Node = null
 
-func setup(start_position: Vector2, next_target: BattleUnit, amount: float, controller: Node) -> void:
+func setup(start_position: Vector2, next_target: Node2D, amount: float, controller: Node, attacker: Node = null) -> void:
 	position = start_position
 	previous_position = start_position
 	target = next_target
@@ -18,9 +19,10 @@ func setup(start_position: Vector2, next_target: BattleUnit, amount: float, cont
 	target_faction = 0
 	damage = amount
 	main_ref = controller
+	source_unit = attacker
 	queue_redraw()
 
-func setup_building(start_position: Vector2, next_cell: Vector2i, amount: float, owner: int, controller: Node) -> void:
+func setup_building(start_position: Vector2, next_cell: Vector2i, amount: float, owner: int, controller: Node, attacker: Node = null) -> void:
 	position = start_position
 	previous_position = start_position
 	target = null
@@ -29,6 +31,7 @@ func setup_building(start_position: Vector2, next_cell: Vector2i, amount: float,
 	target_faction = owner
 	damage = amount
 	main_ref = controller
+	source_unit = attacker
 	queue_redraw()
 
 func _process(delta: float) -> void:
@@ -47,16 +50,24 @@ func _process(delta: float) -> void:
 			return
 		target_position = main_ref.board.axial_to_world(target_cell)
 	else:
-		if not is_instance_valid(target) or not main_ref.units.has(target):
+		if not is_instance_valid(target) or not target.has_method("take_damage"):
 			queue_free()
 			return
 		target_position = target.position
 	position = position.move_toward(target_position, speed * delta)
 	if position.distance_to(target_position) <= 8.0:
 		if target_is_building:
-			main_ref.damage_building(target_cell, damage)
+			var attacker_owner := 0
+			if is_instance_valid(source_unit):
+				attacker_owner = int(source_unit.get("faction"))
+			main_ref.damage_building(target_cell, damage, attacker_owner)
 		else:
-			target.take_damage(damage)
+			# The firing unit may have been recycled while this projectile was in
+			# flight. Never pass a freed object through the typed damage API.
+			if is_instance_valid(source_unit):
+				target.take_damage(damage, source_unit)
+			else:
+				target.take_damage(damage)
 		queue_free()
 	queue_redraw()
 

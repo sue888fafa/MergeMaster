@@ -32,10 +32,30 @@ func _take_turn() -> void:
 	if candidates.is_empty():
 		return
 	candidates.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
-		return main_ref.board.cube_distance(a, main_ref.player_hq) < main_ref.board.cube_distance(b, main_ref.player_hq)
+		var a_hq_distance: int = int(main_ref.board.cube_distance(a, main_ref.ai_hq))
+		var b_hq_distance: int = int(main_ref.board.cube_distance(b, main_ref.ai_hq))
+		if a_hq_distance != b_hq_distance:
+			return a_hq_distance < b_hq_distance
+		# Keep expansion close to the robot's existing frontier when candidates
+		# are equally far from its base.
+		var a_frontier_distance: int = _nearest_owned_distance(a)
+		var b_frontier_distance: int = _nearest_owned_distance(b)
+		if a_frontier_distance != b_frontier_distance:
+			return a_frontier_distance < b_frontier_distance
+		return a.x < b.x if a.x != b.x else a.y < b.y
 	)
 	for cell in candidates:
 		var cost: int = main_ref.reveal_cost(cell, main_ref.ai_hq)
 		if main_ref.gold[main_ref.AI] >= cost:
 			main_ref.reveal_tile(main_ref.AI, cell)
 			return
+
+func _nearest_owned_distance(cell: Vector2i) -> int:
+	var nearest := 999999
+	for raw_cell in main_ref.board.tiles.keys():
+		var owned_cell: Vector2i = raw_cell
+		var tile: Dictionary = main_ref.board.tiles[raw_cell]
+		if not bool(tile["revealed"]) or int(tile["owner"]) != main_ref.AI:
+			continue
+		nearest = mini(nearest, main_ref.board.cube_distance(cell, owned_cell))
+	return nearest
