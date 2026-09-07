@@ -3,15 +3,18 @@ extends CanvasLayer
 
 const Config := preload("res://game_config.gd")
 const EquipmentDataScript := preload("res://equipment_data.gd")
+const MerchantDataScript := preload("res://merchant_data.gd")
 const CameraGuideScript := preload("res://camera_guide.gd")
 const CameraGuideIconScript := preload("res://camera_guide_icon.gd")
 const CatCompanionScript := preload("res://cat_companion.gd")
 
 signal card_event_finished(owner: int, card_type: int, fate_cell: Vector2i)
+signal merchant_item_selected(index: int)
 
 var main_ref: Node
 var status_label: Label
 var stats_label: Label
+var timer_label: Label
 var hint_label: Label
 var hint_container: Control
 var hint_messages: Array[String] = []
@@ -74,6 +77,11 @@ var equipment_replacement_current_label: Label
 var equipment_replacement_new_label: Label
 var equipment_replace_button: Button
 var equipment_discard_button: Button
+var merchant_shop_overlay: ColorRect
+var merchant_shop_panel: ColorRect
+var merchant_shop_title: Label
+var merchant_shop_buttons: Array[Button] = []
+var merchant_shop_close_button: Button
 var viewport_size := Vector2.ZERO
 var camera_guide_refresh_timer := 0.0
 const CAMERA_GUIDE_REFRESH_INTERVAL := 0.10
@@ -139,6 +147,16 @@ func _build_ui() -> void:
 	status_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(status_label)
 
+	timer_label = Label.new()
+	timer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	timer_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	timer_label.add_theme_font_size_override("font_size", 22)
+	timer_label.add_theme_color_override("font_color", Color("#f8fafc"))
+	timer_label.add_theme_color_override("font_outline_color", Color(0.02, 0.04, 0.08, 0.92))
+	timer_label.add_theme_constant_override("outline_size", 5)
+	timer_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(timer_label)
+
 	bombardment_banner = ColorRect.new()
 	bombardment_banner.color = Color(0.35, 0.03, 0.03, 0.94)
 	bombardment_banner.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -152,6 +170,7 @@ func _build_ui() -> void:
 	bombardment_banner.add_child(bombardment_banner_label)
 	_build_camera_guides()
 	_build_cat_companion()
+	_build_merchant_shop_panel()
 
 	hint_container = Control.new()
 	hint_container.name = "PersonalHintHistory"
@@ -206,11 +225,12 @@ func _build_ui() -> void:
 func _build_cat_companion() -> void:
 	cat_companion = CatCompanionScript.new()
 	cat_companion.name = "CatCompanion"
-	cat_companion.size = Vector2(260.0, 160.0)
+	cat_companion.size = Vector2(viewport_size.x, 300.0)
 	cat_companion.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	# Keep modal panels created later in the tree above the companion.
 	cat_companion.z_index = 0
 	add_child(cat_companion)
+	cat_companion.call("set_viewport_size", viewport_size)
 
 func show_officer_bubble(message: String) -> void:
 	if cat_companion == null or message.is_empty():
@@ -221,6 +241,74 @@ func hide_officer_bubble() -> void:
 	if cat_companion == null:
 		return
 	cat_companion.call("hide_bubble")
+
+func reset_cat_companion() -> void:
+	if cat_companion == null:
+		return
+	cat_companion.call("hide_bubble")
+	cat_companion.call("set_expanded", false)
+
+func _build_merchant_shop_panel() -> void:
+	merchant_shop_overlay = ColorRect.new()
+	merchant_shop_overlay.name = "MerchantShopOverlay"
+	merchant_shop_overlay.color = Color(0.01, 0.03, 0.07, 0.80)
+	merchant_shop_overlay.position = Vector2.ZERO
+	merchant_shop_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	merchant_shop_overlay.visible = false
+	add_child(merchant_shop_overlay)
+
+	merchant_shop_panel = ColorRect.new()
+	merchant_shop_panel.name = "MerchantShopPanel"
+	merchant_shop_panel.color = Color("#17233a")
+	merchant_shop_overlay.add_child(merchant_shop_panel)
+
+	merchant_shop_title = Label.new()
+	merchant_shop_title.text = "商人商店"
+	merchant_shop_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	merchant_shop_title.add_theme_font_size_override("font_size", 28)
+	merchant_shop_title.add_theme_color_override("font_color", Color("#f8fafc"))
+	merchant_shop_panel.add_child(merchant_shop_title)
+
+	for index in range(3):
+		var item_button := Button.new()
+		item_button.name = "MerchantItem%d" % index
+		item_button.focus_mode = Control.FOCUS_NONE
+		item_button.alignment = HORIZONTAL_ALIGNMENT_CENTER
+		item_button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		item_button.add_theme_font_size_override("font_size", 16)
+		item_button.add_theme_color_override("font_color", Color("#e2e8f0"))
+		item_button.pressed.connect(_on_merchant_shop_item_pressed.bind(index))
+		merchant_shop_panel.add_child(item_button)
+		merchant_shop_buttons.append(item_button)
+
+	merchant_shop_close_button = Button.new()
+	merchant_shop_close_button.text = "离开商店"
+	merchant_shop_close_button.focus_mode = Control.FOCUS_NONE
+	merchant_shop_close_button.pressed.connect(hide_merchant_shop)
+	merchant_shop_panel.add_child(merchant_shop_close_button)
+
+func _on_merchant_shop_item_pressed(index: int) -> void:
+	if merchant_shop_overlay != null and merchant_shop_overlay.visible:
+		merchant_item_selected.emit(index)
+
+func show_merchant_shop(items: Array[String]) -> void:
+	if merchant_shop_overlay == null:
+		return
+	for index in range(merchant_shop_buttons.size()):
+		var button := merchant_shop_buttons[index]
+		if index < items.size():
+			var item_id := str(items[index])
+			var item: Dictionary = MerchantDataScript.get_item(item_id)
+			button.text = "%s\n\n%s\n\n%d 金币" % [item.get("name", "未知道具"), item.get("description", ""), Config.MERCHANT_ITEM_COST]
+			button.disabled = false
+		else:
+			button.text = ""
+			button.disabled = true
+	merchant_shop_overlay.visible = true
+
+func hide_merchant_shop() -> void:
+	if merchant_shop_overlay != null:
+		merchant_shop_overlay.visible = false
 
 func _build_camera_guides() -> void:
 	camera_guide_layer = Control.new()
@@ -977,6 +1065,20 @@ func _layout_ui() -> void:
 	intelligence_news_content.size = Vector2(news_width - 68, news_height - 192)
 	intelligence_news_footer.position = Vector2(24, news_height - 42)
 	intelligence_news_footer.size = Vector2(news_width - 48, 24)
+	merchant_shop_overlay.size = viewport_size
+	var merchant_width := minf(viewport_size.x * 0.92, 660.0)
+	var merchant_height := minf(viewport_size.y * 0.48, 500.0)
+	merchant_shop_panel.size = Vector2(merchant_width, merchant_height)
+	merchant_shop_panel.position = Vector2((viewport_size.x - merchant_width) * 0.5, (viewport_size.y - merchant_height) * 0.5)
+	merchant_shop_title.position = Vector2(20.0, 22.0)
+	merchant_shop_title.size = Vector2(merchant_width - 40.0, 42.0)
+	var merchant_gap := 12.0
+	var merchant_button_width := (merchant_width - 40.0 - merchant_gap * 2.0) / 3.0
+	for index in range(merchant_shop_buttons.size()):
+		merchant_shop_buttons[index].position = Vector2(20.0 + index * (merchant_button_width + merchant_gap), 84.0)
+		merchant_shop_buttons[index].size = Vector2(merchant_button_width, merchant_height - 154.0)
+	merchant_shop_close_button.position = Vector2((merchant_width - 140.0) * 0.5, merchant_height - 56.0)
+	merchant_shop_close_button.size = Vector2(140.0, 38.0)
 	player_info_button.position = Vector2(16, 14)
 	player_info_button.size = Vector2(48, 48)
 	if bottom_status_panel != null:
@@ -986,6 +1088,8 @@ func _layout_ui() -> void:
 	stats_label.size = Vector2(maxf(1.0, bottom_status_panel.size.x - 24.0), 24.0)
 	status_label.position = bottom_status_panel.position + Vector2(12.0, 34.0)
 	status_label.size = Vector2(maxf(1.0, bottom_status_panel.size.x - 24.0), 22.0)
+	timer_label.position = Vector2(120.0, 62.0)
+	timer_label.size = Vector2(maxf(1.0, viewport_size.x - 240.0), 42.0)
 	var banner_width := maxf(1.0, minf(560.0, viewport_size.x - 32.0))
 	bombardment_banner.position = Vector2((viewport_size.x - banner_width) * 0.5, 14.0)
 	bombardment_banner.size = Vector2(banner_width, 46.0)
@@ -1000,8 +1104,10 @@ func _layout_ui() -> void:
 	end_label.size = Vector2(end_panel.size.x - 40, 110)
 	restart_button.position = Vector2((end_panel.size.x - 160) * 0.5, 190)
 	if cat_companion != null:
-		cat_companion.size = Vector2(260.0, 160.0)
-		cat_companion.position = Vector2(maxf(8.0, viewport_size.x - 270.0), maxf(150.0, viewport_size.y - 174.0))
+		cat_companion.size = Vector2(viewport_size.x, 300.0)
+		cat_companion.position = Vector2.ZERO
+		cat_companion.position.y = maxf(8.0, viewport_size.y - 308.0)
+		cat_companion.call("set_viewport_size", viewport_size)
 	update_camera_guides()
 
 func _notification(what: int) -> void:
@@ -1011,8 +1117,12 @@ func _notification(what: int) -> void:
 func update_state(time_left: float, player_gold: int, ai_gold: int, player_hp: float, ai_hp: float, player_tiles: int, ai_tiles: int) -> void:
 	if stats_label == null:
 		return
-	stats_label.text = "金币  %d       敌方金币  %d       时间  %03d" % [player_gold, ai_gold, int(ceil(time_left))]
-	status_label.text = "我方主城  %03d HP    敌方主城  %03d HP    领地  %02d : %02d" % [int(player_hp), int(ai_hp), player_tiles, ai_tiles]
+	stats_label.text = "金币  %d" % player_gold
+	status_label.text = "我方主城  %03d HP    领地  %02d : %02d" % [int(player_hp), player_tiles, ai_tiles]
+	var total_seconds := maxi(0, int(ceil(time_left)))
+	var minutes := total_seconds / 60
+	var seconds := total_seconds % 60
+	timer_label.text = "%02d:%02d" % [minutes, seconds]
 
 func show_hint(message: String) -> void:
 	if hint_container == null or message.is_empty():

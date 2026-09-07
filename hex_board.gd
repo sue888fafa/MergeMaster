@@ -17,6 +17,8 @@ const EMPTY := 0
 const MINE := 1
 const BARRACKS := 2
 const TOWER := 3
+const MERCHANT := 4
+const STEEL_BARRIER := 5
 const FATE := Config.FATE_TILE_TYPE
 const BARRACKS_2 := Config.BARRACKS_2_TILE_TYPE
 const MINE_TILE := Config.MINE_TILE_TYPE
@@ -32,6 +34,7 @@ var tile_size := 50.0
 var board_origin := Vector2(640.0, 430.0)
 var tiles: Dictionary = {}
 var draw_cells: Array[Vector2i] = []
+var wild_monster_cells: Array[Vector2i] = []
 var map_min_world := Vector2.ZERO
 var map_max_world := Vector2.ZERO
 var buildable_cells: Array[Vector2i] = []
@@ -68,6 +71,8 @@ func _ready() -> void:
 func _build_map() -> void:
 	tiles.clear()
 	draw_cells.clear()
+	wild_monster_cells.clear()
+	_prepare_wild_monster_cells()
 	for q in range(-radius, radius + 1):
 		for r in range(-radius, radius + 1):
 			if abs(q + r) <= radius:
@@ -88,6 +93,9 @@ func _build_map() -> void:
 					"chest_reward_amount": 0,
 					"fate_event_active": false,
 					"monster_active": false,
+					"merchant_active": false,
+					"merchant_stock": [],
+					"ground_item_id": "",
 					"rebuildable": false
 				}
 				draw_cells.append(cell)
@@ -100,7 +108,28 @@ func _build_map() -> void:
 	)
 	_recalculate_map_bounds()
 
+func _prepare_wild_monster_cells() -> void:
+	var candidates: Array[Vector2i] = []
+	for q in range(-radius, radius + 1):
+		for r in range(-radius, radius + 1):
+			if abs(q + r) > radius:
+				continue
+			var cell := Vector2i(q, r)
+			if cell == PLAYER_HQ or cell == AI_HQ:
+				continue
+			if cube_distance(cell, PLAYER_HQ) < Config.VISIBLE_TILE_MIN_DISTANCE:
+				continue
+			candidates.append(cell)
+	var target_count := randi_range(Config.WILD_MONSTER_MIN_COUNT, Config.WILD_MONSTER_MAX_COUNT)
+	target_count = mini(target_count, candidates.size())
+	while wild_monster_cells.size() < target_count and not candidates.is_empty():
+		var candidate_index := randi_range(0, candidates.size() - 1)
+		wild_monster_cells.append(candidates[candidate_index])
+		candidates.remove_at(candidate_index)
+
 func _roll_tile_type(cell: Vector2i) -> int:
+	if wild_monster_cells.has(cell):
+		return Config.WILD_MONSTER_TILE_TYPE
 	var roll := randf()
 	var visible_allowed := cube_distance(cell, PLAYER_HQ) >= Config.VISIBLE_TILE_MIN_DISTANCE
 	if not visible_allowed:
@@ -108,15 +137,23 @@ func _roll_tile_type(cell: Vector2i) -> int:
 		# the regular hidden/fate pool so the configured weights remain valid.
 		var hidden_weight := Config.RANDOM_TILE_TYPE_WEIGHT + Config.FATE_TILE_TYPE_WEIGHT
 		roll *= hidden_weight
+		if roll < Config.RANDOM_TILE_TYPE_WEIGHT:
+			return Config.RANDOM_TILE_TYPE
+		return Config.FATE_TILE_TYPE
+
+	# Wild monster positions are reserved once per map. Normalize the remaining
+	# visible-tile weights so no additional monster can be rolled here.
+	var visible_weight := Config.RANDOM_TILE_TYPE_WEIGHT + Config.FATE_TILE_TYPE_WEIGHT + Config.BARRACKS_2_TILE_TYPE_WEIGHT + Config.MINE_TILE_TYPE_WEIGHT + Config.MERCHANT_TILE_TYPE_WEIGHT
+	roll *= visible_weight
 	if roll < Config.RANDOM_TILE_TYPE_WEIGHT:
 		return Config.RANDOM_TILE_TYPE
 	if roll < Config.RANDOM_TILE_TYPE_WEIGHT + Config.FATE_TILE_TYPE_WEIGHT:
 		return Config.FATE_TILE_TYPE
-	if visible_allowed and roll < Config.RANDOM_TILE_TYPE_WEIGHT + Config.FATE_TILE_TYPE_WEIGHT + Config.BARRACKS_2_TILE_TYPE_WEIGHT:
+	if roll < Config.RANDOM_TILE_TYPE_WEIGHT + Config.FATE_TILE_TYPE_WEIGHT + Config.BARRACKS_2_TILE_TYPE_WEIGHT:
 		return Config.BARRACKS_2_TILE_TYPE
-	if visible_allowed and roll < Config.RANDOM_TILE_TYPE_WEIGHT + Config.FATE_TILE_TYPE_WEIGHT + Config.BARRACKS_2_TILE_TYPE_WEIGHT + Config.MINE_TILE_TYPE_WEIGHT:
+	if roll < Config.RANDOM_TILE_TYPE_WEIGHT + Config.FATE_TILE_TYPE_WEIGHT + Config.BARRACKS_2_TILE_TYPE_WEIGHT + Config.MINE_TILE_TYPE_WEIGHT:
 		return Config.MINE_TILE_TYPE
-	return Config.WILD_MONSTER_TILE_TYPE
+	return Config.MERCHANT_TILE_TYPE
 
 func reset() -> void:
 	_build_map()
@@ -222,7 +259,9 @@ func get_tile_cost(cell: Vector2i) -> int:
 	match int(tile.get("tile_type", Config.RANDOM_TILE_TYPE)):
 		Config.FATE_TILE_TYPE:
 			return Config.FATE_TILE_COST
-		Config.BARRACKS_2_TILE_TYPE, Config.MINE_TILE_TYPE, Config.WILD_MONSTER_TILE_TYPE:
+		Config.MINE_TILE_TYPE:
+			return Config.MINE_TILE_COST
+		Config.BARRACKS_2_TILE_TYPE, Config.WILD_MONSTER_TILE_TYPE, Config.MERCHANT_TILE_TYPE:
 			return Config.VISIBLE_TILE_COST
 	return Config.RANDOM_TILE_COST
 
@@ -245,6 +284,10 @@ func set_building(cell: Vector2i, building: int, level: int = 1, unit_class: int
 		elif building == MINE or building == TOWER:
 			tiles[cell]["building_max_hp"] = Config.MINE_MAX_HP if building == MINE else Config.TOWER_MAX_HP
 			tiles[cell]["building_hp"] = tiles[cell]["building_max_hp"]
+		elif building == STEEL_BARRIER:
+			tiles[cell]["unit_class"] = -1
+			tiles[cell]["building_max_hp"] = Config.STEEL_BARRIER_MAX_HP
+			tiles[cell]["building_hp"] = tiles[cell]["building_max_hp"]
 		else:
 			tiles[cell]["unit_class"] = -1
 			tiles[cell]["building_max_hp"] = 0.0
@@ -253,6 +296,9 @@ func set_building(cell: Vector2i, building: int, level: int = 1, unit_class: int
 		if building != BARRACKS:
 			tiles[cell]["production_count"] = 0
 			tiles[cell]["build_timer"] = 0.0
+		if building != MERCHANT:
+			tiles[cell]["merchant_active"] = false
+			tiles[cell]["merchant_stock"] = []
 
 func destroy_building(cell: Vector2i) -> bool:
 	if not tiles.has(cell):
@@ -261,6 +307,8 @@ func destroy_building(cell: Vector2i) -> bool:
 	if building == EMPTY:
 		return false
 	set_building(cell, EMPTY)
+	tiles[cell]["merchant_active"] = false
+	tiles[cell]["merchant_stock"] = []
 	tiles[cell]["rebuildable"] = true
 	return true
 
@@ -672,7 +720,6 @@ func _draw() -> void:
 	# _draw_tile() lets a later tile row cover the preview while it is moving.
 	if long_press_active and tiles.has(drag_start_cell):
 		_draw_drag_source_preview(drag_start_cell)
-	_draw_legend()
 
 func _draw_tile(cell: Vector2i) -> void:
 	var tile: Dictionary = tiles[cell]
@@ -748,14 +795,17 @@ func _draw_tile(cell: Vector2i) -> void:
 		if cell in purchasable_cells:
 			var tile_cost := get_tile_cost(cell)
 			var price_color := Color("#f87171") if player_gold < tile_cost else Color("#ffffff")
-			draw_string(ThemeDB.fallback_font, center + Vector2(-4, -29), str(tile_cost), HORIZONTAL_ALIGNMENT_LEFT, -1, 16, price_color)
-			_draw_pickaxe_icon(center + Vector2(0.0, 10.0))
+			_draw_pickaxe_icon(center + Vector2(0.0, -14.0))
+			draw_string(ThemeDB.fallback_font, center + Vector2(-4, 16), str(tile_cost), HORIZONTAL_ALIGNMENT_LEFT, -1, 16, price_color)
 	else:
 		if not (cell == drag_start_cell and long_press_active):
 			var building_center := center
 			if int(tile["building"]) == BARRACKS:
 				building_center += get_barracks_merge_offset(cell)
 			_draw_building(cell, building_center, int(tile["building"]), int(tile["building_level"]), int(tile["unit_class"]))
+			var ground_item_id := str(tile.get("ground_item_id", ""))
+			if not ground_item_id.is_empty():
+				_draw_ground_item_icon(center + Vector2(0.0, -24.0), ground_item_id)
 			if bool(tile.get("chest_reward", false)):
 				draw_string(ThemeDB.fallback_font, center + Vector2(-13, -25), "宝箱", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("#fbbf24"))
 
@@ -792,7 +842,7 @@ func _draw_ellipse(center: Vector2, radii: Vector2, color: Color) -> void:
 	draw_colored_polygon(points, color)
 
 func _is_visible_tile_type(tile_type: int) -> bool:
-	return tile_type == FATE or tile_type == WILD_MONSTER or tile_type == BARRACKS_2 or tile_type == MINE_TILE
+	return tile_type == FATE or tile_type == WILD_MONSTER or tile_type == BARRACKS_2 or tile_type == MINE_TILE or tile_type == Config.MERCHANT_TILE_TYPE
 
 func _draw_visible_landmark(tile_type: int, center: Vector2, use_local_transform := true) -> void:
 	var landmark_origin := center + Config.VISIBLE_LANDMARK_OFFSET
@@ -809,6 +859,8 @@ func _draw_visible_landmark(tile_type: int, center: Vector2, use_local_transform
 			_draw_level_two_city_landmark(landmark_center)
 		MINE_TILE:
 			_draw_mine_landmark(landmark_center)
+		Config.MERCHANT_TILE_TYPE:
+			_draw_merchant_landmark(landmark_center)
 	if use_local_transform:
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
@@ -869,6 +921,53 @@ func _draw_mine_landmark(center: Vector2) -> void:
 	draw_colored_polygon(PackedVector2Array([center + Vector2(-8, -9), center + Vector2(8, -17), center + Vector2(3, 8)]), body)
 	draw_colored_polygon(PackedVector2Array([center + Vector2(-4, 7), center + Vector2(0, -5), center + Vector2(5, 8)]), Color("#e5e7eb"))
 
+func _draw_merchant_landmark(center: Vector2) -> void:
+	var cloak := Color("#8b5cf6")
+	var trim := Color("#fbbf24")
+	_draw_ellipse(center + Vector2(0.0, 14.0), Vector2(19.0, 5.0), Color(0.0, 0.0, 0.0, 0.25))
+	draw_circle(center + Vector2(0.0, -7.0), 8.0, Color("#f3c6a5"))
+	draw_colored_polygon(PackedVector2Array([
+		center + Vector2(-13.0, 14.0), center + Vector2(-9.0, -2.0),
+		center + Vector2(9.0, -2.0), center + Vector2(13.0, 14.0)
+	]), cloak)
+	draw_line(center + Vector2(-10.0, 2.0), center + Vector2(10.0, 2.0), trim, 3.0, true)
+	draw_circle(center + Vector2(-3.0, -8.0), 1.4, Color("#172033"))
+	draw_circle(center + Vector2(3.0, -8.0), 1.4, Color("#172033"))
+	draw_line(center + Vector2(-3.0, -3.0), center + Vector2(3.0, -3.0), Color("#7c2d12"), 1.5, true)
+	draw_line(center + Vector2(12.0, 2.0), center + Vector2(18.0, -11.0), trim, 2.5, true)
+	draw_circle(center + Vector2(18.0, -11.0), 3.5, Color("#f59e0b"))
+
+func _draw_ground_item_icon(center: Vector2, item_id: String) -> void:
+	var color := Color("#fbbf24")
+	draw_circle(center + Vector2(0.0, 12.0), 15.0, Color(0.0, 0.0, 0.0, 0.25))
+	match item_id:
+		"dragon":
+			color = Color("#ef4444")
+			draw_colored_polygon(PackedVector2Array([center + Vector2(-13, 7), center + Vector2(0, -12), center + Vector2(13, 7)]), color)
+			draw_circle(center + Vector2(0, -12), 4.0, Color("#fca5a5"))
+			draw_line(center + Vector2(-9, 3), center + Vector2(-16, -5), color, 3.0, true)
+			draw_line(center + Vector2(9, 3), center + Vector2(16, -5), color, 3.0, true)
+		"upgrade":
+			color = Color("#a78bfa")
+			draw_circle(center, 13.0, Color(0.3, 0.2, 0.6, 0.45))
+			draw_string(ThemeDB.fallback_font, center + Vector2(-7, 6), "+1", HORIZONTAL_ALIGNMENT_LEFT, -1, 14, color)
+		"steel_barrier":
+			color = Color("#94a3b8")
+			draw_colored_polygon(PackedVector2Array([center + Vector2(0, -14), center + Vector2(13, -7), center + Vector2(10, 9), center + Vector2(0, 16), center + Vector2(-10, 9), center + Vector2(-13, -7)]), color)
+			draw_line(center + Vector2(-6, 0), center + Vector2(6, 0), Color("#e2e8f0"), 2.0, true)
+		"blizzard":
+			color = Color("#67e8f9")
+			draw_circle(center, 12.0, Color(0.1, 0.7, 0.9, 0.28))
+			for angle in [0.0, PI / 3.0, 2.0 * PI / 3.0]:
+				draw_line(center - Vector2(cos(angle), sin(angle)) * 12.0, center + Vector2(cos(angle), sin(angle)) * 12.0, color, 2.0, true)
+		"transfer_certificate":
+			color = Color("#f59e0b")
+			draw_rect(Rect2(center + Vector2(-11, -14), Vector2(22, 28)), Color("#fef3c7"), true)
+			draw_polyline(PackedVector2Array([center + Vector2(-11, -14), center + Vector2(11, -14), center + Vector2(11, 14), center + Vector2(-11, 14), center + Vector2(-11, -14)]), color, 2.0, true)
+			draw_string(ThemeDB.fallback_font, center + Vector2(-5, 5), "权", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, color)
+		_:
+			draw_circle(center, 12.0, color)
+
 func _draw_pickaxe_icon(center: Vector2) -> void:
 	var handle_color := Color("#d6a85c")
 	var head_color := Color("#e2e8f0")
@@ -920,6 +1019,23 @@ func _draw_building(cell: Vector2i, center: Vector2, building: int, level: int, 
 			var tower_color := _faction_building_color(int(tiles.get(cell, {}).get("owner", UNKNOWN)), Color("#94a3b8"))
 			draw_circle(center, 14.0, tower_color)
 			draw_line(center + Vector2(-4, -4), center + Vector2(13, -18), tower_color.lightened(0.28), 4.0)
+		MERCHANT:
+			_draw_merchant_landmark(center)
+		STEEL_BARRIER:
+			_draw_steel_barrier(center, _faction_building_color(int(tiles.get(cell, {}).get("owner", UNKNOWN)), Color("#94a3b8")))
+
+func _draw_steel_barrier(center: Vector2, color: Color) -> void:
+	var dark := color.darkened(0.45)
+	var light := color.lightened(0.28)
+	_draw_ellipse(center + Vector2(0.0, 13.0), Vector2(21.0, 5.0), Color(0.0, 0.0, 0.0, 0.30))
+	draw_rect(Rect2(center + Vector2(-20.0, -10.0), Vector2(40.0, 22.0)), dark, true)
+	draw_colored_polygon(PackedVector2Array([
+		center + Vector2(-17.0, -14.0), center + Vector2(17.0, -14.0),
+		center + Vector2(20.0, 10.0), center + Vector2(-20.0, 10.0)
+	]), color)
+	for x in [-12.0, 0.0, 12.0]:
+		draw_rect(Rect2(center + Vector2(x - 2.0, -13.0), Vector2(4.0, 24.0)), light, true)
+	draw_line(center + Vector2(-18.0, 0.0), center + Vector2(18.0, 0.0), dark, 2.0, true)
 
 func _unit_class_short_name(unit_class: int) -> String:
 	if unit_class < 0 or unit_class >= Config.UNIT_CLASS_COUNT:
@@ -1138,7 +1254,3 @@ func _hex_points(center: Vector2, size: float) -> PackedVector2Array:
 		var angle := deg_to_rad(60.0 * i - 30.0)
 		result.append(center + Vector2(cos(angle), sin(angle)) * size)
 	return result
-
-func _draw_legend() -> void:
-	var font := ThemeDB.fallback_font
-	draw_string(font, Vector2(280, 700), "可购买地块显示价格数字和锄头图标（普通 1 / 显性 3）    命运地块触发特殊事件    怪物地块会派兵清剿", HORIZONTAL_ALIGNMENT_LEFT, -1, 16, Color("#94a3b8"))

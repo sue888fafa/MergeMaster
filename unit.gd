@@ -22,6 +22,7 @@ var is_ranged := false
 var returning_home := false
 var garrisoned := false
 var monster_target: Node = null
+var frozen_until := 0.0
 
 func setup(owner: int, start_cell: Vector2i, controller: Node, source_level: int = 1, source_class: int = Config.UNIT_CLASS_WARRIOR) -> void:
 	faction = owner
@@ -41,6 +42,7 @@ func setup(owner: int, start_cell: Vector2i, controller: Node, source_level: int
 	returning_home = false
 	garrisoned = false
 	monster_target = null
+	frozen_until = 0.0
 	position = main_ref.board.axial_to_world(cell)
 	queue_redraw()
 
@@ -53,6 +55,15 @@ func clear_monster_target() -> void:
 
 func is_targeting_monster(monster: Node) -> bool:
 	return is_instance_valid(monster_target) and monster_target == monster
+
+func freeze_for(duration: float) -> void:
+	if main_ref == null:
+		return
+	frozen_until = maxf(frozen_until, float(main_ref.elapsed) + duration)
+	queue_redraw()
+
+func is_frozen() -> bool:
+	return main_ref != null and float(main_ref.elapsed) < frozen_until
 
 func begin_return_home() -> void:
 	if returning_home:
@@ -143,6 +154,10 @@ func _draw() -> void:
 	draw_line(Vector2(-2.5, 8.0), Vector2(-4.5, 14.0), outline, 3.0, true)
 	draw_line(Vector2(2.5, 8.0), Vector2(4.5, 14.0), outline, 3.0, true)
 	_draw_class_signature(body, outline)
+	if is_frozen():
+		draw_arc(Vector2.ZERO, 19.0, 0.0, TAU, 20, Color(0.35, 0.9, 1.0, 0.82), 2.0, true)
+		draw_line(Vector2(-13.0, -15.0), Vector2(-7.0, -21.0), Color("#cffafe"), 2.0, true)
+		draw_line(Vector2(7.0, -21.0), Vector2(13.0, -15.0), Color("#cffafe"), 2.0, true)
 	if hp < max_hp:
 		draw_rect(Rect2(-12, -17, 24, 3), Color("#0f172a"), true)
 		draw_rect(Rect2(-12, -17, 24 * clamp(hp / max_hp, 0.0, 1.0), 3), Color("#4ade80"), true)
