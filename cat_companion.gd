@@ -222,6 +222,16 @@ func _get_slot_layout() -> Dictionary:
 		"top": SLOT_TOP
 	}
 
+func _get_animated_slot_rect(index: int, progress: float) -> Rect2:
+	var layout := _get_slot_layout()
+	var slot_size := float(layout["size"])
+	var gap := float(layout["gap"])
+	var target := Vector2(float(layout["left"]) + index * (slot_size + gap), float(layout["top"]))
+	var head_center := _head_center()
+	var origin := head_center - Vector2(slot_size * 0.5, slot_size * 0.5)
+	var slide := ease(clampf(progress, 0.0, 1.0), 0.82)
+	return Rect2(origin.lerp(target, slide), Vector2(slot_size, slot_size))
+
 func _update_interaction_layout() -> void:
 	if head_button == null:
 		return
@@ -230,13 +240,11 @@ func _update_interaction_layout() -> void:
 	head_button.size = Vector2(HEAD_RADIUS * 2.0, HEAD_RADIUS * 2.0)
 	var layout := _get_slot_layout()
 	var slot_size := float(layout["size"])
-	var gap := float(layout["gap"])
-	var left := float(layout["left"])
-	var top := float(layout["top"])
 	for index in range(slot_buttons.size()):
 		var slot_button := slot_buttons[index]
-		slot_button.position = Vector2(left + index * (slot_size + gap), top)
-		slot_button.size = Vector2(slot_size, slot_size)
+		var slot_rect := _get_animated_slot_rect(index, expanded_progress)
+		slot_button.position = slot_rect.position
+		slot_button.size = slot_rect.size
 		slot_button.pivot_offset = Vector2(slot_size * 0.5, slot_size * 0.5)
 		slot_button.visible = expanded_progress > 0.01
 		slot_button.disabled = expanded_progress < 0.55
@@ -255,17 +263,19 @@ func _draw() -> void:
 	_draw_cat_head(head_center)
 
 func _draw_bubble(head_center: Vector2) -> void:
-	var bubble_width := minf(250.0, maxf(150.0, size.x - 16.0))
-	var bubble_x := clampf(head_center.x - bubble_width + 30.0, 8.0, maxf(8.0, size.x - bubble_width - 8.0))
-	var bubble_rect := Rect2(bubble_x, 8.0, bubble_width, 78.0)
+	var bubble_width := minf(175.0, maxf(112.0, size.x - 16.0))
+	var bubble_height := 55.0
+	var bubble_x := clampf(head_center.x - bubble_width + 24.0, 8.0, maxf(8.0, size.x - bubble_width - 8.0))
+	var bubble_y := clampf(head_center.y - HEAD_RADIUS - bubble_height - 10.0, 4.0, maxf(4.0, size.y - bubble_height - 4.0))
+	var bubble_rect := Rect2(bubble_x, bubble_y, bubble_width, bubble_height)
 	draw_style_box(_bubble_style(Color(0.03, 0.06, 0.11, 0.94), Color("#fbbf24")), bubble_rect)
 	var arrow_x := clampf(head_center.x - 12.0, bubble_rect.position.x + 24.0, bubble_rect.end.x - 24.0)
 	draw_colored_polygon(PackedVector2Array([
-		Vector2(arrow_x - 8.0, bubble_rect.end.y), Vector2(arrow_x + 8.0, bubble_rect.end.y), Vector2(arrow_x, bubble_rect.end.y + 13.0)
+		Vector2(arrow_x - 7.0, bubble_rect.end.y), Vector2(arrow_x + 7.0, bubble_rect.end.y), Vector2(arrow_x, bubble_rect.end.y + 9.0)
 	]), Color(0.03, 0.06, 0.11, 0.94))
 	var font := ThemeDB.fallback_font
-	var text_rect := Rect2(bubble_rect.position + Vector2(10.0, 7.0), Vector2(bubble_width - 20.0, 64.0))
-	draw_multiline_string(font, text_rect.position + Vector2(0.0, 14.0), bubble_message, HORIZONTAL_ALIGNMENT_CENTER, text_rect.size.x, 14, 3, Color("#f8fafc"))
+	var text_rect := Rect2(bubble_rect.position + Vector2(8.0, 5.0), Vector2(bubble_width - 16.0, bubble_height - 10.0))
+	draw_multiline_string(font, text_rect.position + Vector2(0.0, 11.0), bubble_message, HORIZONTAL_ALIGNMENT_CENTER, text_rect.size.x, 11, 3, Color("#f8fafc"))
 
 func _bubble_style(background: Color, border: Color) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
@@ -324,12 +334,9 @@ func _draw_expanded_body(head_center: Vector2, reveal: float) -> void:
 func _draw_item_slots(reveal: float) -> void:
 	var layout := _get_slot_layout()
 	var slot_size := float(layout["size"])
-	var gap := float(layout["gap"])
-	var left := float(layout["left"])
-	var top := float(layout["top"])
 	var alpha := clampf(reveal, 0.0, 1.0)
 	for index in range(8):
-		var rect := Rect2(left + index * (slot_size + gap), top, slot_size, slot_size)
+		var rect := _get_animated_slot_rect(index, reveal)
 		draw_style_box(_slot_style(alpha), rect)
 		var center := rect.get_center()
 		draw_circle(center, maxf(3.0, slot_size * 0.13), Color(0.80, 0.87, 0.95, 0.20 * alpha))

@@ -851,7 +851,7 @@ func _draw_visible_landmark(visible_result: int, center: Vector2, use_local_tran
 		landmark_center = Vector2.ZERO
 	match visible_result:
 		Config.VISIBLE_FATE:
-			_draw_fate_card_landmark(landmark_center)
+			_draw_fate_crystal_ball_landmark(landmark_center)
 		Config.VISIBLE_WILD_MONSTER:
 			_draw_wild_landmark(landmark_center)
 		Config.VISIBLE_LEVEL_TWO_BARRACKS:
@@ -949,15 +949,24 @@ func _draw_wild_landmark(center: Vector2) -> void:
 	draw_circle(center + Vector2(4.5, -9.5), 0.8, Color("#f8fafc"))
 	draw_line(center + Vector2(-5, 1), center + Vector2(5, 1), Color("#374151"), 2.0, true)
 
-func _draw_fate_card_landmark(center: Vector2) -> void:
-	var card_center := center + Vector2(0, 2)
-	draw_rect(Rect2(card_center + Vector2(-13, -16) + Vector2(3, 5), Vector2(26, 32)), Color(0.0, 0.0, 0.0, 0.28), true)
-	var card_points := PackedVector2Array([card_center + Vector2(-13, -16), card_center + Vector2(8, -16), card_center + Vector2(13, -11), card_center + Vector2(13, 16), card_center + Vector2(-13, 16)])
-	draw_colored_polygon(card_points, Color("#f8fafc"))
-	draw_polyline(PackedVector2Array([card_points[0], card_points[1], card_points[2], card_points[3], card_points[4], card_points[0]]), Color("#f59e0b"), 2.0, true)
-	draw_colored_polygon(PackedVector2Array([card_center + Vector2(8, -16), card_center + Vector2(8, -11), card_center + Vector2(13, -11)]), Color("#cbd5e1"))
-	draw_circle(card_center, 6.0, Color("#fbbf24"))
-	draw_string(ThemeDB.fallback_font, card_center + Vector2(-4, 4), "命", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("#7c2d12"))
+func _draw_fate_crystal_ball_landmark(center: Vector2) -> void:
+	var base_center := center + Vector2(0.0, 15.0)
+	var ball_center := center + Vector2(0.0, -4.0)
+	# Dark pedestal and a soft shadow make the landmark readable at a distance.
+	_draw_ellipse(base_center + Vector2(0.0, 5.0), Vector2(19.0, 5.5), Color(0.0, 0.0, 0.0, 0.28))
+	draw_colored_polygon(PackedVector2Array([
+		base_center + Vector2(-15.0, 0.0), base_center + Vector2(15.0, 0.0),
+		base_center + Vector2(11.0, 8.0), base_center + Vector2(-11.0, 8.0)
+	]), Color("#312e81"))
+	draw_line(base_center + Vector2(-11.0, 1.0), base_center + Vector2(11.0, 1.0), Color("#a5b4fc"), 2.0, true)
+	draw_circle(ball_center + Vector2(2.0, 3.0), 18.0, Color(0.03, 0.02, 0.12, 0.32))
+	draw_circle(ball_center, 18.0, Color(0.24, 0.42, 0.82, 0.78))
+	draw_circle(ball_center + Vector2(-5.0, -6.0), 5.0, Color(0.80, 0.91, 1.0, 0.74))
+	draw_arc(ball_center, 11.0, -2.4, 0.8, 18, Color("#ddd6fe"), 2.0, true)
+	draw_circle(ball_center + Vector2(6.0, 5.0), 1.8, Color("#fef08a"))
+	draw_circle(ball_center + Vector2(-4.0, 6.0), 1.4, Color("#f5d0fe"))
+	draw_circle(ball_center + Vector2(2.0, -1.0), 1.2, Color("#ffffff"))
+	draw_arc(ball_center, 18.0, 0.0, TAU, 32, Color("#c4b5fd"), 2.0, true)
 
 func _draw_level_two_city_landmark(center: Vector2) -> void:
 	var body := Color(Config.VISIBLE_LANDMARK_COLOR)

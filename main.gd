@@ -24,6 +24,8 @@ const BombardmentEffectScript := preload("res://bombardment_effect.gd")
 const EquipmentDropEffectScript := preload("res://equipment_drop_effect.gd")
 const BarracksUpgradeEffectScript := preload("res://barracks_upgrade_effect.gd")
 const IntelligenceBuildingDropEffectScript := preload("res://intelligence_building_drop_effect.gd")
+const GoldPopupEffectScript := preload("res://gold_popup_effect.gd")
+const QuestionCardEffectScript := preload("res://question_card_effect.gd")
 const INVALID_CELL := Vector2i(999, 999)
 
 @onready var board: HexBoard = $HexBoard
@@ -63,6 +65,9 @@ var card_land_loss_tween: Tween
 var pending_intelligence_building_drop: Dictionary = {}
 var intelligence_building_drop_queue: Array[Dictionary] = []
 var intelligence_building_drop_tween: Tween
+var pending_divinations: Dictionary = {}
+var divination_tween: Tween
+var divination_camera_active: Dictionary = {}
 var rng := RandomNumberGenerator.new()
 var hq_initial_dispatched := {PLAYER: false, AI: false}
 var fate_locked_cells: Dictionary = {}
@@ -76,6 +81,7 @@ var bombardment_round_centers: Array[Vector2i] = []
 var bombardment_warning_round := 0
 var bombardment_warning_area: Array[Vector2i] = []
 var bombardment_warning_clear_time := 0.0
+var bombardment_banner_hide_time := 0.0
 var bombardment_locked_until: Dictionary = {}
 var last_message := "购买主城周围的金色地块扩张领地，普通地块每格需要 1 金币。"
 var selected_barracks := Vector2i(999, 999)
@@ -106,6 +112,7 @@ func _ready() -> void:
 	hud.setup(self)
 	hud.card_event_finished.connect(_on_card_event_finished)
 	hud.card_draw_finished.connect(_on_card_draw_finished)
+	hud.divination_roll_finished.connect(_on_divination_roll_finished)
 	hud.merchant_item_selected.connect(_on_merchant_item_selected)
 	hud.merchant_dismissed.connect(_on_merchant_dismissed)
 	hud.inventory_item_dropped.connect(_on_inventory_item_dropped)
@@ -136,6 +143,9 @@ func _process(delta: float) -> void:
 
 func _process_bombardment() -> void:
 	_cleanup_bombardment_locks()
+	if bombardment_banner_hide_time > 0.0 and elapsed >= bombardment_banner_hide_time:
+		bombardment_banner_hide_time = 0.0
+		hud.hide_bombardment_banner()
 	if bombardment_warning_clear_time > 0.0 and elapsed >= bombardment_warning_clear_time:
 		bombardment_warning_clear_time = 0.0
 		board.clear_bombardment_warning_cells()
@@ -145,6 +155,7 @@ func _process_bombardment() -> void:
 		bombardment_next_time = float(Config.BOMBARDMENT_ROUND_TIMES[0])
 		bombardment_warning_round = 0
 		bombardment_warning_area.clear()
+		bombardment_banner_hide_time = 0.0
 
 	if not bombardment_started:
 		return
@@ -176,10 +187,11 @@ func _process_bombardment() -> void:
 			board.set_bombardment_warning_cells(area)
 			bombardment_warning_clear_time = elapsed + Config.BOMBARDMENT_DANGER_DISPLAY_DURATION
 		hud.show_bombardment_banner("炮轰开始：第%d轮" % bombardment_round)
+		# Keep the result visible through the impact, then clear the announcement
+		# one second after the bombardment presentation has finished.
+		bombardment_banner_hide_time = elapsed + Config.BOMBARDMENT_EFFECT_DURATION + Config.BOMBARDMENT_BANNER_CLOSE_DELAY
 		if bombardment_round < Config.BOMBARDMENT_ROUNDS:
 			bombardment_next_time = float(Config.BOMBARDMENT_ROUND_TIMES[bombardment_round])
-	if bombardment_round >= Config.BOMBARDMENT_ROUNDS:
-		hud.hide_bombardment_banner()
 	_refresh_bombardment_visual_cells()
 
 func _cleanup_bombardment_locks() -> void:
@@ -289,6 +301,7 @@ func _process_hq_dispatch() -> void:
 
 func restart_game() -> void:
 	hud.clear_card_events()
+	hud.clear_divination_events()
 	hud.clear_equipment_state()
 	hud.clear_hint_history()
 	hud.hide_intelligence_news()
@@ -313,10 +326,14 @@ func restart_game() -> void:
 		card_land_loss_tween.kill()
 	if intelligence_building_drop_tween != null and intelligence_building_drop_tween.is_valid():
 		intelligence_building_drop_tween.kill()
+	if divination_tween != null and divination_tween.is_valid():
+		divination_tween.kill()
 	pending_card_land_loss.clear()
 	card_land_loss_queue.clear()
 	pending_intelligence_building_drop.clear()
 	intelligence_building_drop_queue.clear()
+	pending_divinations.clear()
+	divination_camera_active.clear()
 	board.clear_card_land_loss_cell()
 	board.intelligence_building_drop_animations.clear()
 	_clear_effect_children(fate_effects)
@@ -334,10 +351,12 @@ func restart_game() -> void:
 	bombardment_warning_round = 0
 	bombardment_warning_area.clear()
 	bombardment_warning_clear_time = 0.0
+	bombardment_banner_hide_time = 0.0
 	bombardment_locked_until.clear()
 	board.clear_bombardment_cells()
 	board.clear_bombardment_warning_cells()
 	bombardment_warning_clear_time = 0.0
+	bombardment_banner_hide_time = 0.0
 	_clear_effect_children(bombardment_effects)
 	gold = {PLAYER: Config.INITIAL_GOLD, AI: Config.INITIAL_GOLD}
 	base_hp = {PLAYER: Config.HQ_MAX_HP, AI: Config.HQ_MAX_HP}
@@ -556,11 +575,13 @@ func build_barracks(owner: int, cell: Vector2i) -> bool:
 			_update_hud()
 		return false
 	gold[owner] -= BARRACKS_COST
-	board.set_building(cell, BARRACKS, 1, _random_unit_class())
+	var unit_class := _random_unit_class()
+	board.set_building(cell, BARRACKS, 1, unit_class)
+	_spawn_initial_barracks_unit(owner, cell)
 	_register_building(owner)
 	_reset_barracks_production_timer(cell)
 	if owner == PLAYER:
-		last_message = "我方建造了兵营，等待生产第一名士兵。"
+		last_message = "我方建造了兵营，已配置 1 名士兵。"
 	board.queue_redraw()
 	return true
 
@@ -614,6 +635,7 @@ func reveal_tile(owner: int, cell: Vector2i) -> bool:
 	if gold[owner] < cost:
 		return false
 	var result := _roll_tile_result(tile)
+	var fate_tile := _is_fate_tile(cell)
 	if not board.start_tile_reveal(cell):
 		return false
 	gold[owner] -= cost
@@ -624,6 +646,7 @@ func reveal_tile(owner: int, cell: Vector2i) -> bool:
 		"free_reveal": false,
 		"cost": cost,
 		"fate_origin": INVALID_CELL,
+		"fate_tile": fate_tile,
 		"committed": false
 	}
 	if owner == PLAYER:
@@ -644,6 +667,7 @@ func _reveal_free_tile(owner: int, cell: Vector2i, allow_fate := false, fate_ori
 	if bool(tile["revealed"]):
 		return false
 	var result := _roll_tile_result(tile)
+	var fate_tile := _is_fate_tile(cell)
 	if not board.start_tile_reveal(cell):
 		return false
 	pending_reveals[cell] = {
@@ -653,6 +677,7 @@ func _reveal_free_tile(owner: int, cell: Vector2i, allow_fate := false, fate_ori
 		"free_reveal": true,
 		"cost": 0,
 		"fate_origin": fate_origin,
+		"fate_tile": fate_tile,
 		"committed": false
 	}
 	_refresh_purchase_cells()
@@ -673,7 +698,7 @@ func _apply_tile_result(owner: int, cell: Vector2i, result: Dictionary, trigger_
 		_register_building(owner)
 	if building == BARRACKS:
 		_reset_barracks_production_timer(cell)
-	if trigger_fate and _is_fate_tile(cell):
+	if trigger_fate and (bool(result.get("fate_tile", false)) or _is_fate_tile(cell)):
 		board.tiles[cell]["fate_event_active"] = true
 		_trigger_random_event(owner, cell)
 
@@ -702,7 +727,7 @@ func _on_tile_reveal_finished(cell: Vector2i) -> void:
 	if owner == PLAYER and not bool(pending["free_reveal"]) and not bool(pending.get("chest_claimed", false)):
 		last_message = "我方购买并解锁了 %s，消耗 %d 金币。" % [_building_name(int(pending["result"]["building"])), int(pending["cost"])]
 	var random_event_type: int = int(pending["result"].get("random_event", -1))
-	if bool(pending["trigger_fate"]) and _is_fate_tile(cell):
+	if bool(pending["trigger_fate"]) and (bool(pending.get("fate_tile", false)) or _is_fate_tile(cell)):
 		board.tiles[cell]["fate_event_active"] = true
 		_trigger_random_event(owner, cell)
 	elif bool(pending["trigger_fate"]) and random_event_type >= 0:
@@ -736,7 +761,7 @@ func _show_player_officer_bubble(message: String) -> void:
 func _trigger_random_event(owner: int, fate_cell: Vector2i, forced_event_type: int = -1) -> void:
 	var event_type := forced_event_type
 	if event_type < 0:
-		# Fate tiles now only trigger the card event. Bomb, plane and chest
+		# Fate tiles now enter the divination house. Bomb, plane and chest
 		# monster events are rolled by ordinary random tiles instead.
 		if not _is_fate_tile(fate_cell):
 			return
@@ -749,14 +774,320 @@ func _trigger_random_event(owner: int, fate_cell: Vector2i, forced_event_type: i
 		Config.RANDOM_EVENT_CHEST_MONSTER:
 			_trigger_chest_monster_event(owner, fate_cell)
 		Config.RANDOM_EVENT_CARD:
-			_trigger_card_event(owner, fate_cell)
+			_trigger_divination_event(owner, fate_cell)
 		Config.RANDOM_EVENT_INTELLIGENCE:
 			_trigger_intelligence_event(owner, fate_cell)
 		Config.RANDOM_EVENT_DISPLAY_CARD:
 			_trigger_display_only_card_event(owner, fate_cell)
 
+func _trigger_divination_event(owner: int, fate_cell: Vector2i) -> void:
+	var target_type := _roll_divination_target(owner)
+	var target := _resolve_divination_target(owner, target_type)
+	var event_type := _roll_divination_event()
+	var return_position := board.get_camera_position()
+	if not divination_camera_active.is_empty():
+		return_position = divination_camera_active["return_position"]
+	var pending := {
+		"owner": owner,
+		"target": target,
+		"target_type": target_type,
+		"event_type": event_type,
+		"fate_cell": fate_cell,
+		"return_position": return_position
+	}
+	pending_divinations[fate_cell] = pending
+	if owner == PLAYER and hud != null and hud.has_method("play_divination_event"):
+		pending["target_name"] = _faction_display_name(target)
+		pending["target_type_name"] = _divination_target_name(target_type)
+		pending["event_name"] = _divination_event_name(event_type)
+		hud.play_divination_event(pending)
+		return
+	var result := _resolve_divination_event(owner, target, event_type)
+	_present_divination_result(pending, result, false)
+
+func _roll_divination_target(_diviner: int) -> int:
+	return rng.randi_range(Config.FATE_DIVINATION_TARGET_MOST_TILES, Config.FATE_DIVINATION_TARGET_DIVINER)
+
+func _resolve_divination_target(diviner: int, target_type: int) -> int:
+	var owners: Array[int] = [PLAYER, AI]
+	match target_type:
+		Config.FATE_DIVINATION_TARGET_MOST_TILES, Config.FATE_DIVINATION_TARGET_LEAST_TILES:
+			var values: Dictionary = {}
+			for owner in owners:
+				values[owner] = _count_owned(owner)
+			var target_value := -INF if target_type == Config.FATE_DIVINATION_TARGET_MOST_TILES else INF
+			var candidates: Array[int] = []
+			for owner in owners:
+				var value: int = int(values[owner])
+				var is_better := value > target_value if target_type == Config.FATE_DIVINATION_TARGET_MOST_TILES else value < target_value
+				if is_better:
+					target_value = value
+					candidates.clear()
+					candidates.append(owner)
+				elif is_equal_approx(float(value), float(target_value)):
+					candidates.append(owner)
+			return candidates[rng.randi_range(0, candidates.size() - 1)] if not candidates.is_empty() else diviner
+		Config.FATE_DIVINATION_TARGET_MOST_GOLD, Config.FATE_DIVINATION_TARGET_LEAST_GOLD:
+			var target_value := -INF if target_type == Config.FATE_DIVINATION_TARGET_MOST_GOLD else INF
+			var candidates: Array[int] = []
+			for owner in owners:
+				var value := float(gold[owner])
+				var is_better := value > target_value if target_type == Config.FATE_DIVINATION_TARGET_MOST_GOLD else value < target_value
+				if is_better:
+					target_value = value
+					candidates.clear()
+					candidates.append(owner)
+				elif is_equal_approx(value, float(target_value)):
+					candidates.append(owner)
+			return candidates[rng.randi_range(0, candidates.size() - 1)] if not candidates.is_empty() else diviner
+		Config.FATE_DIVINATION_TARGET_RANDOM_ENEMY:
+			return AI if diviner == PLAYER else PLAYER
+		Config.FATE_DIVINATION_TARGET_DIVINER:
+			return diviner
+	return diviner
+
+func _roll_divination_event() -> int:
+	return rng.randi_range(Config.FATE_DIVINATION_GAIN_CARD, Config.FATE_DIVINATION_DOWNGRADE_BARRACKS)
+
+func _divination_target_name(target_type: int) -> String:
+	match target_type:
+		Config.FATE_DIVINATION_TARGET_MOST_TILES:
+			return "地块最多的人"
+		Config.FATE_DIVINATION_TARGET_LEAST_TILES:
+			return "地块最少的人"
+		Config.FATE_DIVINATION_TARGET_MOST_GOLD:
+			return "金币最多的人"
+		Config.FATE_DIVINATION_TARGET_LEAST_GOLD:
+			return "金币最少的人"
+		Config.FATE_DIVINATION_TARGET_RANDOM_ENEMY:
+			return "随机一个敌人"
+		Config.FATE_DIVINATION_TARGET_DIVINER:
+			return "占卜者"
+	return "未知目标"
+
+func _divination_event_name(event_type: int) -> String:
+	match event_type:
+		Config.FATE_DIVINATION_GAIN_CARD:
+			return "获得一张随机卡片"
+		Config.FATE_DIVINATION_GAIN_BARRACKS:
+			return "获得一座1级兵营"
+		Config.FATE_DIVINATION_LOSE_BARRACKS:
+			return "丢失一座1级兵营"
+		Config.FATE_DIVINATION_GAIN_GOLD:
+			return "获得5个金币"
+		Config.FATE_DIVINATION_UPGRADE_BARRACKS:
+			return "升级1座兵营"
+		Config.FATE_DIVINATION_DOWNGRADE_BARRACKS:
+			return "降级1座兵营"
+	return "未知占卜结果"
+
+func _resolve_divination_event(diviner: int, target: int, event_type: int) -> Dictionary:
+	var result := {
+		"success": false,
+		"target": target,
+		"event_type": event_type,
+		"target_cell": INVALID_CELL,
+		"card_id": ""
+	}
+	match event_type:
+		Config.FATE_DIVINATION_GAIN_CARD:
+			if (target == PLAYER and item_inventory.size() >= 8) or (target == AI and ai_card_inventory.size() >= 8):
+				return result
+			var card_id := _roll_card_id()
+			if card_id.is_empty() or not _grant_card(target, card_id):
+				return result
+			result["success"] = true
+			result["card_id"] = card_id
+			result["target_cell"] = player_hq if target == PLAYER else ai_hq
+		Config.FATE_DIVINATION_GAIN_BARRACKS:
+			var empty_candidates := _divination_owned_empty_cells(target)
+			if empty_candidates.is_empty():
+				return result
+			var cell: Vector2i = empty_candidates[rng.randi_range(0, empty_candidates.size() - 1)]
+			board.set_building(cell, BARRACKS, 1, _random_unit_class())
+			board.set_tile_owner(cell, target, true)
+			board.set_production_count(cell, 0)
+			_register_building(target)
+			_spawn_initial_barracks_unit(target, cell)
+			_reset_barracks_production_timer(cell)
+			result["success"] = true
+			result["target_cell"] = cell
+		Config.FATE_DIVINATION_LOSE_BARRACKS:
+			var loss_candidates := _divination_barracks_cells(target, true)
+			if loss_candidates.is_empty():
+				return result
+			var lost_cell: Vector2i = loss_candidates[rng.randi_range(0, loss_candidates.size() - 1)]
+			board.set_building(lost_cell, EMPTY)
+			board.tiles[lost_cell]["merchant_active"] = false
+			board.tiles[lost_cell]["merchant_stock"] = []
+			board.tiles[lost_cell]["ground_item_id"] = ""
+			board.set_tile_owner(lost_cell, target, true)
+			_check_building_result()
+			result["success"] = true
+			result["target_cell"] = lost_cell
+		Config.FATE_DIVINATION_GAIN_GOLD:
+			gold[target] += 5.0
+			_play_gold_popup(target, 5)
+			result["success"] = true
+			result["target_cell"] = player_hq if target == PLAYER else ai_hq
+		Config.FATE_DIVINATION_UPGRADE_BARRACKS:
+			var upgrade_candidates := _divination_barracks_cells(target, false)
+			upgrade_candidates = upgrade_candidates.filter(func(cell: Vector2i) -> bool: return board.get_building_level(cell) < MAX_BARRACKS_LEVEL)
+			if upgrade_candidates.is_empty():
+				return result
+			var upgraded_cell: Vector2i = upgrade_candidates[rng.randi_range(0, upgrade_candidates.size() - 1)]
+			var upgraded_level := board.get_building_level(upgraded_cell) + 1
+			board.set_building(upgraded_cell, BARRACKS, upgraded_level, board.get_building_unit_class(upgraded_cell))
+			_play_barracks_upgrade_effect(upgraded_cell, upgraded_level)
+			result["success"] = true
+			result["target_cell"] = upgraded_cell
+		Config.FATE_DIVINATION_DOWNGRADE_BARRACKS:
+			var downgrade_candidates := _divination_barracks_cells(target, false)
+			downgrade_candidates = downgrade_candidates.filter(func(cell: Vector2i) -> bool: return board.get_building_level(cell) > 1)
+			if downgrade_candidates.is_empty():
+				return result
+			var downgraded_cell: Vector2i = downgrade_candidates[rng.randi_range(0, downgrade_candidates.size() - 1)]
+			var production_timer := board.get_build_timer(downgraded_cell)
+			var downgraded_level := board.get_building_level(downgraded_cell) - 1
+			board.set_building(downgraded_cell, BARRACKS, downgraded_level, board.get_building_unit_class(downgraded_cell))
+			board.update_build_timer(downgraded_cell, production_timer)
+			result["success"] = true
+			result["target_cell"] = downgraded_cell
+	return result
+
+func _divination_owned_empty_cells(owner: int) -> Array[Vector2i]:
+	var cells: Array[Vector2i] = []
+	for raw_cell in board.tiles:
+		var cell: Vector2i = raw_cell
+		var tile: Dictionary = board.tiles[raw_cell]
+		if _is_hq_cell(cell) or not bool(tile.get("revealed", false)) or int(tile.get("owner", EMPTY)) != owner:
+			continue
+		if int(tile.get("building", EMPTY)) != EMPTY or bool(tile.get("monster_active", false)) or bool(tile.get("fate_event_active", false)):
+			continue
+		if is_bombardment_locked(cell) or _is_card_land_loss_locked(cell) or _is_reveal_locked(cell):
+			continue
+		if not str(tile.get("ground_item_id", "")).is_empty():
+			continue
+		cells.append(cell)
+	return cells
+
+func _divination_barracks_cells(owner: int, level_one_only: bool) -> Array[Vector2i]:
+	var cells: Array[Vector2i] = []
+	for raw_cell in board.tiles:
+		var cell: Vector2i = raw_cell
+		var tile: Dictionary = board.tiles[raw_cell]
+		if _is_hq_cell(cell) or not bool(tile.get("revealed", false)) or int(tile.get("owner", EMPTY)) != owner or int(tile.get("building", EMPTY)) != BARRACKS:
+			continue
+		if bool(tile.get("fate_event_active", false)) or is_bombardment_locked(cell) or _is_card_land_loss_locked(cell):
+			continue
+		if level_one_only and board.get_building_level(cell) != 1:
+			continue
+		cells.append(cell)
+	return cells
+
+func _present_divination_result(pending: Dictionary, result: Dictionary, player_visible: bool) -> void:
+	var diviner := int(pending.get("owner", AI))
+	var target := int(pending.get("target", diviner))
+	var event_type := int(pending.get("event_type", Config.FATE_DIVINATION_GAIN_CARD))
+	var result_message := _divination_result_message(diviner, target, event_type, result)
+	if hud != null and not game_over:
+		hud.show_world_broadcast(result_message, Config.FATE_DIVINATION_BROADCAST_DURATION)
+		if player_visible:
+			hud.show_divination_result(result_message if bool(result.get("success", false)) else "本次占卜未产生效果。")
+	if not player_visible:
+		pending_divinations.erase(pending.get("fate_cell", INVALID_CELL))
+		_finish_fate_event(pending.get("fate_cell", INVALID_CELL))
+		_refresh_purchase_cells()
+		board.queue_redraw()
+		return
+	var target_cell: Vector2i = result.get("target_cell", INVALID_CELL)
+	if not bool(result.get("success", false)) or not board.has_cell(target_cell):
+		_begin_divination_result_delay(pending)
+		return
+	divination_camera_active = {
+		"fate_cell": pending["fate_cell"],
+		"return_position": pending["return_position"],
+		"target_cell": target_cell
+	}
+	board.focus_camera_on_cell(target_cell, Config.FATE_DIVINATION_CAMERA_MOVE_DURATION)
+	if divination_tween != null and divination_tween.is_valid():
+		divination_tween.kill()
+	divination_tween = create_tween()
+	divination_tween.tween_interval(Config.FATE_DIVINATION_CAMERA_MOVE_DURATION + Config.FATE_DIVINATION_CAMERA_HOLD_DURATION)
+	divination_tween.tween_callback(_return_from_divination_camera)
+
+func _begin_divination_result_delay(pending: Dictionary) -> void:
+	if divination_tween != null and divination_tween.is_valid():
+		divination_tween.kill()
+	divination_tween = create_tween()
+	divination_tween.tween_interval(Config.FATE_DIVINATION_RESULT_DURATION)
+	divination_tween.tween_callback(_finish_divination_presentation.bind(pending.get("fate_cell", INVALID_CELL)))
+
+func _return_from_divination_camera() -> void:
+	if divination_camera_active.is_empty():
+		return
+	board.focus_camera_on_position(divination_camera_active["return_position"], Config.FATE_DIVINATION_CAMERA_RETURN_DURATION)
+	if divination_tween != null and divination_tween.is_valid():
+		divination_tween.kill()
+	divination_tween = create_tween()
+	divination_tween.tween_interval(Config.FATE_DIVINATION_CAMERA_RETURN_DURATION)
+	divination_tween.tween_callback(_finish_divination_presentation.bind(divination_camera_active["fate_cell"]))
+
+func _finish_divination_presentation(fate_cell: Vector2i) -> void:
+	divination_camera_active.clear()
+	pending_divinations.erase(fate_cell)
+	if hud != null:
+		hud.finish_divination_event()
+	_finish_fate_event(fate_cell)
+	_refresh_purchase_cells()
+	board.queue_redraw()
+
+func _on_divination_roll_finished(fate_cell: Vector2i) -> void:
+	if not pending_divinations.has(fate_cell):
+		return
+	var pending: Dictionary = pending_divinations[fate_cell]
+	var result := _resolve_divination_event(int(pending["owner"]), int(pending["target"]), int(pending["event_type"]))
+	_present_divination_result(pending, result, true)
+
+func _divination_result_message(diviner: int, target: int, event_type: int, result: Dictionary) -> String:
+	var prefix := "%s的占卜：" % _faction_display_name(diviner)
+	if not bool(result.get("success", false)):
+		return prefix + "本次占卜未产生效果。"
+	var target_name := _faction_display_name(target)
+	match event_type:
+		Config.FATE_DIVINATION_GAIN_CARD:
+			return prefix + "%s获得了%s" % [target_name, MerchantDataScript.get_item_name(str(result.get("card_id", "")))]
+		Config.FATE_DIVINATION_GAIN_BARRACKS:
+			return prefix + "%s获得了一座1级兵营" % target_name
+		Config.FATE_DIVINATION_LOSE_BARRACKS:
+			return prefix + "%s丢失了一座1级兵营" % target_name
+		Config.FATE_DIVINATION_GAIN_GOLD:
+			return prefix + "%s获得了5个金币" % target_name
+		Config.FATE_DIVINATION_UPGRADE_BARRACKS:
+			return prefix + "%s升级了1座兵营" % target_name
+		Config.FATE_DIVINATION_DOWNGRADE_BARRACKS:
+			return prefix + "%s降级了一座兵营" % target_name
+	return prefix + "本次占卜未产生效果。"
+
+func _faction_display_name(owner: int) -> String:
+	return "玩家" if owner == PLAYER else "机器人"
+
+func _play_gold_popup(owner: int, amount: int) -> void:
+	var hq_cell := player_hq if owner == PLAYER else ai_hq
+	var effect: Node2D = GoldPopupEffectScript.new()
+	_ensure_dynamic_layer(fate_effects, "FateEffects").add_child(effect)
+	effect.setup(board.axial_to_world(hq_cell), amount)
+
 func _trigger_display_only_card_event(owner: int, cell: Vector2i) -> void:
 	var card_id := _roll_card_id()
+	var effect: Node2D = QuestionCardEffectScript.new()
+	_ensure_dynamic_layer(fate_effects, "FateEffects").add_child(effect)
+	effect.setup(board.axial_to_world(cell))
+	effect.finished.connect(_on_question_card_effect_finished.bind(owner, card_id, cell))
+
+func _on_question_card_effect_finished(owner: int, card_id: String, cell: Vector2i) -> void:
+	if game_over:
+		return
 	if owner == PLAYER and hud != null and hud.has_method("play_card_draw"):
 		hud.play_card_draw(owner, card_id, cell)
 	else:
@@ -1602,8 +1933,7 @@ func _try_use_active_item(target_cell: Vector2i) -> void:
 			var sealed_level := MerchantDataScript.get_sealed_barracks_level(active_item_id)
 			var sealed_class := MerchantDataScript.get_sealed_barracks_class(active_item_id)
 			board.set_building(target_cell, BARRACKS, sealed_level, sealed_class)
-			board.set_production_count(target_cell, 0)
-			board.update_build_timer(target_cell, Config.BARRACKS_PRODUCTION_INTERVAL)
+			_spawn_initial_barracks_unit(PLAYER, target_cell)
 			_register_building(PLAYER)
 			used = true
 	else:
@@ -1652,6 +1982,7 @@ func _try_use_active_item(target_cell: Vector2i) -> void:
 			MerchantDataScript.ITEM_BUILD:
 				if bool(board.tiles[target_cell].get("revealed", false)) and int(board.tiles[target_cell].get("owner", EMPTY)) == PLAYER and int(board.tiles[target_cell].get("building", EMPTY)) == EMPTY and not bool(board.tiles[target_cell].get("monster_active", false)) and str(board.tiles[target_cell].get("ground_item_id", "")).is_empty():
 					board.set_building(target_cell, BARRACKS, 1, _random_unit_class())
+					_spawn_initial_barracks_unit(PLAYER, target_cell)
 					_register_building(PLAYER)
 					used = true
 			MerchantDataScript.ITEM_RECYCLE:
@@ -2158,6 +2489,22 @@ func _spawn_unit(owner: int, cell: Vector2i, barracks_level: int = 1, unit_class
 	units.append(unit)
 	return unit
 
+func _spawn_initial_barracks_unit(owner: int, cell: Vector2i) -> bool:
+	if owner != PLAYER and owner != AI:
+		return false
+	if not board.has_cell(cell) or int(board.tiles[cell].get("building", EMPTY)) != BARRACKS:
+		return false
+	var level := board.get_building_level(cell)
+	var unit_count := _count_barracks_units(cell, owner)
+	if unit_count < level and _count_active_units(owner) < Config.MAX_ACTIVE_UNITS_PER_FACTION:
+		var unit := _spawn_unit(owner, cell, level, board.get_building_unit_class(cell))
+		if not _has_enemy_in_barracks_range(cell, owner):
+			unit.begin_garrison()
+		unit_count += 1
+	board.set_production_count(cell, unit_count)
+	board.update_build_timer(cell, 0.0 if unit_count >= level else Config.BARRACKS_PRODUCTION_INTERVAL)
+	return unit_count > 0
+
 func _spawn_monster(cell: Vector2i) -> WildMonster:
 	var monster: WildMonster = MonsterScript.new()
 	_ensure_dynamic_layer(units_layer, "Units").add_child(monster)
@@ -2384,6 +2731,7 @@ func _end_game(message: String) -> void:
 		return
 	game_over = true
 	hud.clear_card_events()
+	hud.clear_divination_events()
 	hud.hide_intelligence_news()
 	hud.reset_cat_companion()
 	hud.hide_merchant_shop()
@@ -2395,10 +2743,14 @@ func _end_game(message: String) -> void:
 		card_land_loss_tween.kill()
 	if intelligence_building_drop_tween != null and intelligence_building_drop_tween.is_valid():
 		intelligence_building_drop_tween.kill()
+	if divination_tween != null and divination_tween.is_valid():
+		divination_tween.kill()
 	pending_card_land_loss.clear()
 	card_land_loss_queue.clear()
 	pending_intelligence_building_drop.clear()
 	intelligence_building_drop_queue.clear()
+	pending_divinations.clear()
+	divination_camera_active.clear()
 	board.clear_card_land_loss_cell()
 	board.intelligence_building_drop_animations.clear()
 	hud.clear_equipment_state()

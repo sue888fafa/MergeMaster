@@ -8,9 +8,11 @@ const CameraGuideScript := preload("res://camera_guide.gd")
 const CameraGuideIconScript := preload("res://camera_guide_icon.gd")
 const CatCompanionScript := preload("res://cat_companion.gd")
 const MerchantCardIconScript := preload("res://merchant_card_icon.gd")
+const DivinationHouseArtScript := preload("res://divination_house_art.gd")
 
 signal card_event_finished(owner: int, card_type: int, fate_cell: Vector2i)
 signal card_draw_finished(owner: int, card_id: String, fate_cell: Vector2i)
+signal divination_roll_finished(fate_cell: Vector2i)
 signal merchant_item_selected(index: int)
 signal merchant_dismissed
 signal inventory_item_dropped(item_id: String, screen_position: Vector2)
@@ -47,11 +49,25 @@ var card_event_queue: Array[Dictionary] = []
 var card_event_current: Dictionary = {}
 var card_event_tween: Tween
 var card_event_running := false
+var divination_event_queue: Array[Dictionary] = []
+var divination_event_current: Dictionary = {}
+var divination_event_tween: Tween
+var divination_event_running := false
+var divination_roll_emitted := false
 var card_event_overlay: ColorRect
 var card_event_panel: ColorRect
 var card_event_title: Label
 var card_event_card: Label
 var card_event_detail: Label
+var card_draw_result_icon: Control
+var divination_overlay: ColorRect
+var divination_panel: Panel
+var divination_title: Label
+var divination_target: Label
+var divination_event_label: Label
+var divination_result: Label
+var divination_event_icons: Array[Label] = []
+var divination_house_art: Control
 var intelligence_news_queue: Array[Dictionary] = []
 var intelligence_news_current: Dictionary = {}
 var intelligence_news_tween: Tween
@@ -277,6 +293,7 @@ func _build_ui() -> void:
 	_build_player_info_panel()
 	_build_equipment_panels()
 	_build_card_event_panel()
+	_build_divination_panel()
 	_build_intelligence_news_panel()
 	_layout_ui()
 	update_camera_guides()
@@ -954,6 +971,11 @@ func _build_card_event_panel() -> void:
 	card_event_card.add_theme_color_override("font_color", Color("#fbbf24"))
 	card_event_panel.add_child(card_event_card)
 
+	card_draw_result_icon = MerchantCardIconScript.new()
+	card_draw_result_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card_draw_result_icon.visible = false
+	card_event_panel.add_child(card_draw_result_icon)
+
 	card_event_detail = Label.new()
 	card_event_detail.text = "卡片正在滚动"
 	card_event_detail.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -961,6 +983,70 @@ func _build_card_event_panel() -> void:
 	card_event_detail.add_theme_font_size_override("font_size", 17)
 	card_event_detail.add_theme_color_override("font_color", Color("#cbd5e1"))
 	card_event_panel.add_child(card_event_detail)
+
+func _build_divination_panel() -> void:
+	divination_overlay = ColorRect.new()
+	divination_overlay.name = "DivinationOverlay"
+	divination_overlay.color = Color(0.01, 0.02, 0.06, 0.76)
+	divination_overlay.position = Vector2.ZERO
+	divination_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	divination_overlay.visible = false
+	add_child(divination_overlay)
+
+	divination_panel = Panel.new()
+	divination_panel.name = "DivinationHouse"
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = Color("#17152e")
+	panel_style.border_color = Color("#a78bfa")
+	panel_style.set_border_width_all(2)
+	panel_style.set_corner_radius_all(18)
+	divination_panel.add_theme_stylebox_override("panel", panel_style)
+	divination_overlay.add_child(divination_panel)
+	divination_house_art = DivinationHouseArtScript.new()
+	divination_house_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	divination_panel.add_child(divination_house_art)
+
+	divination_title = Label.new()
+	divination_title.text = "占卜屋"
+	divination_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	divination_title.add_theme_font_size_override("font_size", 28)
+	divination_title.add_theme_color_override("font_color", Color("#fef3c7"))
+	divination_panel.add_child(divination_title)
+
+	divination_target = Label.new()
+	divination_target.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	divination_target.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	divination_target.add_theme_font_size_override("font_size", 18)
+	divination_target.add_theme_color_override("font_color", Color("#ddd6fe"))
+	divination_panel.add_child(divination_target)
+
+	var icon_names := ["卡", "营", "损", "金", "升", "降"]
+	for icon_name in icon_names:
+		var icon := Label.new()
+		icon.text = icon_name
+		icon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		icon.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		icon.add_theme_font_size_override("font_size", 26)
+		icon.add_theme_color_override("font_color", Color("#c4b5fd"))
+		icon.add_theme_color_override("font_outline_color", Color(0.03, 0.02, 0.10, 0.95))
+		icon.add_theme_constant_override("outline_size", 4)
+		divination_panel.add_child(icon)
+		divination_event_icons.append(icon)
+
+	divination_event_label = Label.new()
+	divination_event_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	divination_event_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	divination_event_label.add_theme_font_size_override("font_size", 19)
+	divination_event_label.add_theme_color_override("font_color", Color("#f8fafc"))
+	divination_panel.add_child(divination_event_label)
+
+	divination_result = Label.new()
+	divination_result.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	divination_result.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	divination_result.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	divination_result.add_theme_font_size_override("font_size", 16)
+	divination_result.add_theme_color_override("font_color", Color("#fbbf24"))
+	divination_panel.add_child(divination_result)
 
 func _build_intelligence_news_panel() -> void:
 	intelligence_news_overlay = ColorRect.new()
@@ -1075,21 +1161,16 @@ func _start_next_card_event() -> void:
 	if bool(card_event_current.get("is_card_draw", false)):
 		var drawn_id := str(card_event_current.get("card_id", ""))
 		var drawn_item := MerchantDataScript.get_item(drawn_id)
-		card_event_title.text = "随机事件 · 抽卡"
-		_show_card_preview_text("随机获得一张卡片", "正在准备卡片库")
-		card_event_tween.tween_interval(0.35)
-		var preview_ids: Array = MerchantDataScript.CARD_IDS
-		if preview_ids.is_empty():
-			preview_ids = [drawn_id]
-		for index in range(15):
-			var preview_id := str(preview_ids[index % preview_ids.size()])
-			var preview_item := MerchantDataScript.get_item(preview_id)
-			card_event_tween.tween_callback(_show_card_preview_text.bind(str(preview_item.get("name", "未知卡片")), "卡片滚动中..."))
-			card_event_tween.tween_interval(0.10)
-		card_event_tween.tween_callback(_show_card_preview_text.bind(str(drawn_item.get("name", "未知卡片")), str(drawn_item.get("description", ""))))
-		card_event_tween.tween_interval(0.45)
+		card_event_title.text = "随机事件 · 获得卡片"
+		card_draw_result_icon.call("setup_card", drawn_id)
+		card_draw_result_icon.visible = true
+		card_event_card.text = str(drawn_item.get("name", "未知卡片"))
+		card_event_detail.text = str(drawn_item.get("description", ""))
+		_set_card_draw_result_layout(true)
+		card_event_tween.tween_interval(Config.QUESTION_CARD_RESULT_DURATION)
 		card_event_tween.tween_callback(_finish_card_draw)
 		return
+	_set_card_draw_result_layout(false)
 	card_event_title.text = "随机事件 · 翻卡"
 	card_event_card.text = "抽卡中..."
 	card_event_detail.text = "卡片正在滚动"
@@ -1134,12 +1215,33 @@ func _finish_card_draw() -> void:
 	card_event_running = false
 	_start_next_card_event()
 
+func _set_card_draw_result_layout(active: bool) -> void:
+	if card_draw_result_icon == null or card_event_panel == null:
+		return
+	card_draw_result_icon.visible = active
+	if active:
+		var card_width := card_event_panel.size.x
+		card_draw_result_icon.position = Vector2((card_width - 112.0) * 0.5, 92.0)
+		card_draw_result_icon.size = Vector2(112.0, 132.0)
+		card_event_card.position = Vector2(24.0, 224.0)
+		card_event_card.size = Vector2(card_width - 48.0, 52.0)
+		card_event_detail.position = Vector2(34.0, 292.0)
+		card_event_detail.size = Vector2(card_width - 68.0, 110.0)
+	else:
+		var card_width := card_event_panel.size.x
+		card_event_card.position = Vector2(24.0, 132.0)
+		card_event_card.size = Vector2(card_width - 48.0, 150.0)
+		card_event_detail.position = Vector2(24.0, 310.0)
+		card_event_detail.size = Vector2(card_width - 48.0, 48.0)
+
 func clear_card_events() -> void:
 	if card_event_tween != null and card_event_tween.is_valid():
 		card_event_tween.kill()
 	card_event_queue.clear()
 	card_event_current = {}
 	card_event_running = false
+	if card_draw_result_icon:
+		card_draw_result_icon.visible = false
 	if card_event_overlay:
 		card_event_overlay.visible = false
 
@@ -1232,8 +1334,34 @@ func _layout_ui() -> void:
 	card_event_title.size = Vector2(card_width - 48, 48)
 	card_event_card.position = Vector2(24, 132)
 	card_event_card.size = Vector2(card_width - 48, 150)
+	card_draw_result_icon.position = Vector2((card_width - 112.0) * 0.5, 92.0)
+	card_draw_result_icon.size = Vector2(112.0, 132.0)
+	card_draw_result_icon.visible = bool(card_event_current.get("is_card_draw", false))
+	if card_draw_result_icon.visible:
+		_set_card_draw_result_layout(true)
 	card_event_detail.position = Vector2(24, 310)
 	card_event_detail.size = Vector2(card_width - 48, 48)
+	divination_overlay.size = viewport_size
+	var divination_width := minf(viewport_size.x * 0.88, 620.0)
+	var divination_height := minf(viewport_size.y * 0.46, 470.0)
+	divination_panel.size = Vector2(divination_width, divination_height)
+	divination_panel.position = Vector2((viewport_size.x - divination_width) * 0.5, (viewport_size.y - divination_height) * 0.5)
+	divination_title.position = Vector2(24, 2)
+	divination_title.size = Vector2(divination_width - 48, 34)
+	divination_target.position = Vector2(24, 34)
+	divination_target.size = Vector2(divination_width - 48, 26)
+	divination_house_art.position = Vector2.ZERO
+	divination_house_art.size = Vector2(divination_width, 310.0)
+	var ball_center := Vector2(divination_width * 0.5, 132.0)
+	var icon_radius := 43.0
+	for index in range(divination_event_icons.size()):
+		var angle := -PI * 0.5 + TAU * float(index) / float(divination_event_icons.size())
+		divination_event_icons[index].position = ball_center + Vector2(cos(angle), sin(angle)) * icon_radius - Vector2(20.0, 20.0)
+		divination_event_icons[index].size = Vector2(40.0, 40.0)
+	divination_event_label.position = Vector2(24, 320)
+	divination_event_label.size = Vector2(divination_width - 48, 32)
+	divination_result.position = Vector2(28, 364)
+	divination_result.size = Vector2(divination_width - 56, divination_height - 384)
 	intelligence_news_overlay.size = viewport_size
 	var news_width := minf(viewport_size.x * 0.88, 620.0)
 	var news_height := minf(viewport_size.y * 0.34, 380.0)
@@ -1293,7 +1421,7 @@ func _layout_ui() -> void:
 	timer_label.position = Vector2(120.0, 62.0)
 	timer_label.size = Vector2(maxf(1.0, viewport_size.x - 240.0), 42.0)
 	var banner_width := maxf(1.0, minf(560.0, viewport_size.x - 32.0))
-	bombardment_banner.position = Vector2((viewport_size.x - banner_width) * 0.5, 14.0)
+	bombardment_banner.position = Vector2((viewport_size.x - banner_width) * 0.5, 110.0)
 	bombardment_banner.size = Vector2(banner_width, 46.0)
 	bombardment_banner_label.position = Vector2(12, 0)
 	bombardment_banner_label.size = Vector2(maxf(0.0, bombardment_banner.size.x - 24), bombardment_banner.size.y)
@@ -1388,6 +1516,109 @@ func hide_world_broadcast() -> void:
 	world_broadcast_message = ""
 	world_broadcast_remaining = 0.0
 	_refresh_broadcast_banner()
+
+func play_divination_event(data: Dictionary) -> void:
+	divination_event_queue.append(data)
+	if not divination_event_running:
+		_start_next_divination_event()
+
+func _start_next_divination_event() -> void:
+	if divination_event_queue.is_empty():
+		divination_event_running = false
+		divination_event_current = {}
+		divination_roll_emitted = false
+		if divination_overlay:
+			divination_overlay.visible = false
+		return
+	divination_event_current = divination_event_queue.pop_front()
+	divination_event_running = true
+	divination_roll_emitted = false
+	divination_overlay.visible = true
+	divination_title.text = "占卜屋"
+	divination_target.text = "目标选择中..."
+	divination_event_label.text = "等待目标确定"
+	divination_result.text = "请等待占卜结果"
+	if divination_event_tween != null and divination_event_tween.is_valid():
+		divination_event_tween.kill()
+	divination_event_tween = create_tween()
+	divination_event_tween.tween_interval(0.08)
+	var target_names := ["地块最多的人", "地块最少的人", "金币最多的人", "金币最少的人", "随机一个敌人", "占卜者"]
+	var target_roll_steps := target_names.size() * 2
+	var target_step := maxf(0.035, (Config.FATE_DIVINATION_TARGET_ROLL_DURATION - 0.08) / float(target_roll_steps))
+	for index in range(target_roll_steps):
+		divination_event_tween.tween_callback(_show_divination_target_preview.bind(target_names[index % target_names.size()]))
+		divination_event_tween.tween_interval(target_step)
+	divination_event_tween.tween_callback(_show_divination_target_result)
+	divination_event_tween.tween_interval(0.18)
+	divination_event_tween.tween_callback(_start_divination_event_roll)
+
+func _show_divination_target_preview(target_type_name: String) -> void:
+	divination_target.text = "%s：占卜中..." % target_type_name
+
+func _show_divination_target_result() -> void:
+	divination_target.text = "%s：%s" % [str(divination_event_current.get("target_type_name", "目标")), str(divination_event_current.get("target_name", "未知"))]
+
+func _start_divination_event_roll() -> void:
+	if not divination_event_running:
+		return
+	divination_event_label.text = "占卜图标滚动中..."
+	# The target-selection tween is already running; start a fresh tween for
+	# the event roll because Godot does not allow appending to a started tween.
+	divination_event_tween = create_tween()
+	var roll_steps := 24
+	var interval_sum := 0.0
+	var intervals: Array[float] = []
+	for index in range(roll_steps):
+		var progress := float(index) / float(roll_steps - 1)
+		var interval := lerpf(0.16, 0.045, clampf(progress / 0.25, 0.0, 1.0))
+		if progress > 0.72:
+			interval = lerpf(0.045, 0.22, (progress - 0.72) / 0.28)
+		intervals.append(interval)
+		interval_sum += interval
+	var interval_scale := Config.FATE_DIVINATION_ROLL_DURATION / interval_sum
+	for index in range(roll_steps):
+		var icon_index := index % divination_event_icons.size()
+		if index == roll_steps - 1:
+			icon_index = int(divination_event_current.get("event_type", icon_index)) % divination_event_icons.size()
+		divination_event_tween.tween_callback(_show_divination_icon.bind(icon_index))
+		divination_event_tween.tween_interval(intervals[index] * interval_scale)
+	divination_event_tween.tween_callback(_emit_divination_roll)
+
+func _show_divination_icon(active_index: int) -> void:
+	for index in range(divination_event_icons.size()):
+		var icon := divination_event_icons[index]
+		icon.add_theme_color_override("font_color", Color("#fbbf24") if index == active_index else Color("#c4b5fd"))
+		icon.scale = Vector2(1.12, 1.12) if index == active_index else Vector2.ONE
+	divination_event_label.text = "占卜图标滚动中..."
+
+func _emit_divination_roll() -> void:
+	if not divination_event_running or divination_roll_emitted:
+		return
+	divination_roll_emitted = true
+	divination_event_label.text = str(divination_event_current.get("event_name", "占卜结果"))
+	divination_roll_finished.emit(divination_event_current.get("fate_cell", Vector2i(999, 999)))
+
+func show_divination_result(message: String) -> void:
+	if divination_result:
+		divination_result.text = message
+
+func finish_divination_event() -> void:
+	if divination_event_tween != null and divination_event_tween.is_valid():
+		divination_event_tween.kill()
+	divination_event_current = {}
+	divination_roll_emitted = false
+	divination_event_running = false
+	_start_next_divination_event()
+
+func clear_divination_events() -> void:
+	if divination_event_tween != null and divination_event_tween.is_valid():
+		divination_event_tween.kill()
+	divination_event_queue.clear()
+	divination_event_current = {}
+	divination_roll_emitted = false
+	divination_event_running = false
+	if divination_overlay:
+		divination_overlay.visible = false
 
 func show_result(message: String) -> void:
 	clear_camera_guides()
