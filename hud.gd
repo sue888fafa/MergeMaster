@@ -7,14 +7,19 @@ const MerchantDataScript := preload("res://merchant_data.gd")
 const CameraGuideScript := preload("res://camera_guide.gd")
 const CameraGuideIconScript := preload("res://camera_guide_icon.gd")
 const CatCompanionScript := preload("res://cat_companion.gd")
+const MerchantCardIconScript := preload("res://merchant_card_icon.gd")
 
 signal card_event_finished(owner: int, card_type: int, fate_cell: Vector2i)
+signal card_draw_finished(owner: int, card_id: String, fate_cell: Vector2i)
 signal merchant_item_selected(index: int)
+signal merchant_dismissed
+signal inventory_item_dropped(item_id: String, screen_position: Vector2)
 
 var main_ref: Node
 var status_label: Label
 var stats_label: Label
 var timer_label: Label
+var hq_health_bar: ProgressBar
 var hint_label: Label
 var hint_container: Control
 var hint_messages: Array[String] = []
@@ -81,7 +86,16 @@ var merchant_shop_overlay: ColorRect
 var merchant_shop_panel: ColorRect
 var merchant_shop_title: Label
 var merchant_shop_buttons: Array[Button] = []
+var merchant_shop_card_icons: Array[Control] = []
+var merchant_shop_card_titles: Array[Label] = []
+var merchant_shop_card_descriptions: Array[Label] = []
+var merchant_shop_price_labels: Array[Label] = []
+var merchant_shop_coin_icons: Array[Control] = []
 var merchant_shop_close_button: Button
+var merchant_shop_dismiss_button: Button
+var building_damage_edge_soft: Panel
+var building_damage_edge: Panel
+var building_damage_edge_tween: Tween
 var viewport_size := Vector2.ZERO
 var camera_guide_refresh_timer := 0.0
 const CAMERA_GUIDE_REFRESH_INTERVAL := 0.10
@@ -110,7 +124,7 @@ func _build_ui() -> void:
 	player_info_button = Button.new()
 	player_info_button.text = "♟"
 	player_info_button.tooltip_text = "主角信息"
-	player_info_button.position = Vector2(16, 14)
+	player_info_button.position = Vector2(16, 78)
 	player_info_button.size = Vector2(48, 48)
 	player_info_button.add_theme_font_size_override("font_size", 26)
 	player_info_button.add_theme_color_override("font_color", Color("#f8fafc"))
@@ -133,19 +147,42 @@ func _build_ui() -> void:
 	bottom_status_panel.name = "BottomStatusPanel"
 	bottom_status_panel.color = Color(0.03, 0.07, 0.13, 0.86)
 	bottom_status_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bottom_status_panel.visible = false
 	add_child(bottom_status_panel)
 
 	stats_label = Label.new()
-	stats_label.add_theme_font_size_override("font_size", 16)
+	stats_label.add_theme_font_size_override("font_size", 18)
 	stats_label.add_theme_color_override("font_color", Color("#f8fafc"))
+	stats_label.add_theme_color_override("font_outline_color", Color(0.02, 0.04, 0.08, 0.92))
+	stats_label.add_theme_constant_override("outline_size", 4)
 	stats_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(stats_label)
 
 	status_label = Label.new()
-	status_label.add_theme_font_size_override("font_size", 12)
-	status_label.add_theme_color_override("font_color", Color("#fbbf24"))
+	status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	status_label.add_theme_font_size_override("font_size", 17)
+	status_label.add_theme_color_override("font_color", Color("#f8fafc"))
+	status_label.add_theme_color_override("font_outline_color", Color(0.02, 0.04, 0.08, 0.92))
+	status_label.add_theme_constant_override("outline_size", 4)
 	status_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(status_label)
+
+	hq_health_bar = ProgressBar.new()
+	hq_health_bar.name = "PlayerHQHealthBar"
+	hq_health_bar.max_value = Config.HQ_MAX_HP
+	hq_health_bar.value = Config.HQ_MAX_HP
+	hq_health_bar.show_percentage = false
+	hq_health_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var hq_health_background := StyleBoxFlat.new()
+	hq_health_background.bg_color = Color("#3f1720")
+	hq_health_background.set_corner_radius_all(5)
+	var hq_health_fill := StyleBoxFlat.new()
+	hq_health_fill.bg_color = Color("#ef4444")
+	hq_health_fill.set_corner_radius_all(5)
+	hq_health_bar.add_theme_stylebox_override("background", hq_health_background)
+	hq_health_bar.add_theme_stylebox_override("fill", hq_health_fill)
+	hq_health_bar.visible = false
+	add_child(hq_health_bar)
 
 	timer_label = Label.new()
 	timer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -168,6 +205,28 @@ func _build_ui() -> void:
 	bombardment_banner_label.add_theme_font_size_override("font_size", 19)
 	bombardment_banner_label.add_theme_color_override("font_color", Color("#fee2e2"))
 	bombardment_banner.add_child(bombardment_banner_label)
+
+	building_damage_edge_soft = Panel.new()
+	building_damage_edge_soft.name = "BuildingDamageEdgeSoftFlash"
+	building_damage_edge_soft.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	building_damage_edge_soft.visible = false
+	var soft_edge_style := StyleBoxFlat.new()
+	soft_edge_style.bg_color = Color(1.0, 0.02, 0.02, 0.0)
+	soft_edge_style.border_color = Color(1.0, 0.04, 0.04, 0.22)
+	soft_edge_style.set_border_width_all(34)
+	building_damage_edge_soft.add_theme_stylebox_override("panel", soft_edge_style)
+	add_child(building_damage_edge_soft)
+
+	building_damage_edge = Panel.new()
+	building_damage_edge.name = "BuildingDamageEdgeFlash"
+	building_damage_edge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	building_damage_edge.visible = false
+	var edge_style := StyleBoxFlat.new()
+	edge_style.bg_color = Color(1.0, 0.02, 0.02, 0.0)
+	edge_style.border_color = Color(1.0, 0.10, 0.10, 0.48)
+	edge_style.set_border_width_all(14)
+	building_damage_edge.add_theme_stylebox_override("panel", edge_style)
+	add_child(building_damage_edge)
 	_build_camera_guides()
 	_build_cat_companion()
 	_build_merchant_shop_panel()
@@ -225,12 +284,36 @@ func _build_ui() -> void:
 func _build_cat_companion() -> void:
 	cat_companion = CatCompanionScript.new()
 	cat_companion.name = "CatCompanion"
-	cat_companion.size = Vector2(viewport_size.x, 300.0)
+	cat_companion.size = Vector2(viewport_size.x, 340.0)
 	cat_companion.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	# Keep modal panels created later in the tree above the companion.
 	cat_companion.z_index = 0
 	add_child(cat_companion)
 	cat_companion.call("set_viewport_size", viewport_size)
+	cat_companion.inventory_item_dropped.connect(_on_cat_inventory_item_dropped)
+
+func _on_cat_inventory_item_dropped(item_id: String, screen_position: Vector2) -> void:
+	inventory_item_dropped.emit(item_id, screen_position)
+
+func play_card_draw(owner: int, card_id: String, fate_cell: Vector2i) -> void:
+	card_event_queue.append({"owner": owner, "card_id": card_id, "fate_cell": fate_cell, "is_card_draw": true})
+	if not card_event_running:
+		_start_next_card_event()
+
+func set_item_inventory(items: Array[String], fly_item_id: String = "", fly_origin: Vector2 = Vector2(-1.0, -1.0)) -> void:
+	if cat_companion == null:
+		return
+	cat_companion.call("set_item_inventory", items)
+	if not fly_item_id.is_empty():
+		var origin := fly_origin
+		if origin.x < 0.0 or origin.y < 0.0:
+			origin = viewport_size * 0.5
+		cat_companion.call("play_item_fly_in", fly_item_id, origin)
+
+func get_merchant_item_screen_position(index: int) -> Vector2:
+	if index >= 0 and index < merchant_shop_buttons.size() and is_instance_valid(merchant_shop_buttons[index]):
+		return merchant_shop_buttons[index].get_global_rect().get_center()
+	return viewport_size * 0.5
 
 func show_officer_bubble(message: String) -> void:
 	if cat_companion == null or message.is_empty():
@@ -273,13 +356,48 @@ func _build_merchant_shop_panel() -> void:
 		var item_button := Button.new()
 		item_button.name = "MerchantItem%d" % index
 		item_button.focus_mode = Control.FOCUS_NONE
-		item_button.alignment = HORIZONTAL_ALIGNMENT_CENTER
-		item_button.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		item_button.add_theme_font_size_override("font_size", 16)
-		item_button.add_theme_color_override("font_color", Color("#e2e8f0"))
+		item_button.text = ""
 		item_button.pressed.connect(_on_merchant_shop_item_pressed.bind(index))
 		merchant_shop_panel.add_child(item_button)
 		merchant_shop_buttons.append(item_button)
+
+		var card_icon: Control = MerchantCardIconScript.new()
+		card_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		item_button.add_child(card_icon)
+		merchant_shop_card_icons.append(card_icon)
+
+		var card_title := Label.new()
+		card_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		card_title.add_theme_font_size_override("font_size", 17)
+		card_title.add_theme_color_override("font_color", Color("#f8fafc"))
+		card_title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		item_button.add_child(card_title)
+		merchant_shop_card_titles.append(card_title)
+
+		var card_description := Label.new()
+		card_description.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		card_description.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+		card_description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		card_description.add_theme_font_size_override("font_size", 13)
+		card_description.add_theme_color_override("font_color", Color("#cbd5e1"))
+		card_description.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		item_button.add_child(card_description)
+		merchant_shop_card_descriptions.append(card_description)
+
+		var price_label := Label.new()
+		price_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		price_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		price_label.add_theme_font_size_override("font_size", 18)
+		price_label.add_theme_color_override("font_color", Color("#fde68a"))
+		price_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		item_button.add_child(price_label)
+		merchant_shop_price_labels.append(price_label)
+
+		var coin_icon: Control = MerchantCardIconScript.new()
+		coin_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		coin_icon.call("setup_coin")
+		item_button.add_child(coin_icon)
+		merchant_shop_coin_icons.append(coin_icon)
 
 	merchant_shop_close_button = Button.new()
 	merchant_shop_close_button.text = "离开商店"
@@ -287,22 +405,50 @@ func _build_merchant_shop_panel() -> void:
 	merchant_shop_close_button.pressed.connect(hide_merchant_shop)
 	merchant_shop_panel.add_child(merchant_shop_close_button)
 
+	merchant_shop_dismiss_button = Button.new()
+	merchant_shop_dismiss_button.text = "驱赶商人"
+	merchant_shop_dismiss_button.focus_mode = Control.FOCUS_NONE
+	merchant_shop_dismiss_button.pressed.connect(_on_merchant_shop_dismiss_pressed)
+	merchant_shop_panel.add_child(merchant_shop_dismiss_button)
+
 func _on_merchant_shop_item_pressed(index: int) -> void:
 	if merchant_shop_overlay != null and merchant_shop_overlay.visible:
 		merchant_item_selected.emit(index)
+
+func _on_merchant_shop_dismiss_pressed() -> void:
+	if merchant_shop_overlay != null and merchant_shop_overlay.visible:
+		merchant_dismissed.emit()
 
 func show_merchant_shop(items: Array[String]) -> void:
 	if merchant_shop_overlay == null:
 		return
 	for index in range(merchant_shop_buttons.size()):
 		var button := merchant_shop_buttons[index]
+		var card_icon := merchant_shop_card_icons[index]
+		var card_title := merchant_shop_card_titles[index]
+		var card_description := merchant_shop_card_descriptions[index]
+		var price_label := merchant_shop_price_labels[index]
+		var coin_icon := merchant_shop_coin_icons[index]
 		if index < items.size():
 			var item_id := str(items[index])
 			var item: Dictionary = MerchantDataScript.get_item(item_id)
-			button.text = "%s\n\n%s\n\n%d 金币" % [item.get("name", "未知道具"), item.get("description", ""), Config.MERCHANT_ITEM_COST]
+			card_icon.call("setup_card", item_id)
+			card_title.text = str(item.get("name", "未知卡片"))
+			card_description.text = str(item.get("description", ""))
+			price_label.text = str(Config.MERCHANT_ITEM_COST)
+			card_icon.visible = true
+			card_title.visible = true
+			card_description.visible = true
+			price_label.visible = true
+			coin_icon.visible = true
 			button.disabled = false
 		else:
 			button.text = ""
+			card_icon.visible = false
+			card_title.visible = false
+			card_description.visible = false
+			price_label.visible = false
+			coin_icon.visible = false
 			button.disabled = true
 	merchant_shop_overlay.visible = true
 
@@ -925,9 +1071,28 @@ func _start_next_card_event() -> void:
 	card_event_current = card_event_queue.pop_front()
 	card_event_running = true
 	card_event_overlay.visible = true
+	card_event_tween = create_tween()
+	if bool(card_event_current.get("is_card_draw", false)):
+		var drawn_id := str(card_event_current.get("card_id", ""))
+		var drawn_item := MerchantDataScript.get_item(drawn_id)
+		card_event_title.text = "随机事件 · 抽卡"
+		_show_card_preview_text("随机获得一张卡片", "正在准备卡片库")
+		card_event_tween.tween_interval(0.35)
+		var preview_ids: Array = MerchantDataScript.CARD_IDS
+		if preview_ids.is_empty():
+			preview_ids = [drawn_id]
+		for index in range(15):
+			var preview_id := str(preview_ids[index % preview_ids.size()])
+			var preview_item := MerchantDataScript.get_item(preview_id)
+			card_event_tween.tween_callback(_show_card_preview_text.bind(str(preview_item.get("name", "未知卡片")), "卡片滚动中..."))
+			card_event_tween.tween_interval(0.10)
+		card_event_tween.tween_callback(_show_card_preview_text.bind(str(drawn_item.get("name", "未知卡片")), str(drawn_item.get("description", ""))))
+		card_event_tween.tween_interval(0.45)
+		card_event_tween.tween_callback(_finish_card_draw)
+		return
+	card_event_title.text = "随机事件 · 翻卡"
 	card_event_card.text = "抽卡中..."
 	card_event_detail.text = "卡片正在滚动"
-	card_event_tween = create_tween()
 	var card_count := Config.CARD_EVENT_UPGRADE_BARRACKS + 1
 	for index in range(16):
 		card_event_tween.tween_callback(_show_card_preview.bind(index % card_count)).set_delay(0.09)
@@ -943,6 +1108,10 @@ func _show_card_result(card_type: int) -> void:
 	card_event_card.text = _card_event_name(card_type)
 	card_event_detail.text = "抽卡结果"
 
+func _show_card_preview_text(title: String, detail: String) -> void:
+	card_event_card.text = title
+	card_event_detail.text = detail
+
 func _finish_card_event() -> void:
 	if not card_event_running or card_event_current.is_empty():
 		return
@@ -950,6 +1119,17 @@ func _finish_card_event() -> void:
 	var card_type := int(card_event_current["card_type"])
 	var fate_cell: Vector2i = card_event_current["fate_cell"]
 	card_event_finished.emit(owner, card_type, fate_cell)
+	card_event_current = {}
+	card_event_running = false
+	_start_next_card_event()
+
+func _finish_card_draw() -> void:
+	if not card_event_running or card_event_current.is_empty():
+		return
+	var owner := int(card_event_current.get("owner", 1))
+	var card_id := str(card_event_current.get("card_id", ""))
+	var fate_cell: Vector2i = card_event_current.get("fate_cell", Vector2i(999, 999))
+	card_draw_finished.emit(owner, card_id, fate_cell)
 	card_event_current = {}
 	card_event_running = false
 	_start_next_card_event()
@@ -964,6 +1144,8 @@ func clear_card_events() -> void:
 		card_event_overlay.visible = false
 
 func _card_event_name(card_type: int) -> String:
+	if card_type == Config.RANDOM_EVENT_DISPLAY_CARD:
+		return "抽卡事件"
 	match card_type:
 		Config.CARD_EVENT_LOSE_LAND:
 			return "世界随机地块失去归属"
@@ -986,7 +1168,7 @@ func _layout_ui() -> void:
 		player_camera_guide.size = viewport_size
 		enemy_camera_guide.call("configure_safe_rect", guide_rect)
 		player_camera_guide.call("configure_safe_rect", guide_rect)
-	player_info_button.position = Vector2(16, 12)
+	player_info_button.position = Vector2(16, 78)
 	player_info_button.size = Vector2(112, 36)
 	player_info_button.visible = viewport_size.x >= 150.0
 	player_info_title.position = Vector2(28, 20)
@@ -1079,15 +1261,35 @@ func _layout_ui() -> void:
 		merchant_shop_buttons[index].size = Vector2(merchant_button_width, merchant_height - 154.0)
 	merchant_shop_close_button.position = Vector2((merchant_width - 140.0) * 0.5, merchant_height - 56.0)
 	merchant_shop_close_button.size = Vector2(140.0, 38.0)
-	player_info_button.position = Vector2(16, 14)
+	merchant_shop_dismiss_button.position = Vector2(20.0, merchant_height - 56.0)
+	merchant_shop_dismiss_button.size = Vector2(140.0, 38.0)
+	for index in range(merchant_shop_buttons.size()):
+		var button_size := merchant_shop_buttons[index].size
+		merchant_shop_card_icons[index].position = Vector2((button_size.x - 64.0) * 0.5, 12.0)
+		merchant_shop_card_icons[index].size = Vector2(64.0, 78.0)
+		merchant_shop_card_titles[index].position = Vector2(8.0, 88.0)
+		merchant_shop_card_titles[index].size = Vector2(button_size.x - 16.0, 28.0)
+		merchant_shop_card_descriptions[index].position = Vector2(10.0, 122.0)
+		merchant_shop_card_descriptions[index].size = Vector2(button_size.x - 20.0, maxf(34.0, button_size.y - 178.0))
+		merchant_shop_price_labels[index].position = Vector2(button_size.x - 88.0, button_size.y - 48.0)
+		merchant_shop_price_labels[index].size = Vector2(42.0, 30.0)
+		merchant_shop_coin_icons[index].position = Vector2(button_size.x - 48.0, button_size.y - 48.0)
+		merchant_shop_coin_icons[index].size = Vector2(30.0, 30.0)
+	player_info_button.position = Vector2(16, 78)
 	player_info_button.size = Vector2(48, 48)
 	if bottom_status_panel != null:
 		bottom_status_panel.position = Vector2(16.0, viewport_size.y - 78.0)
 		bottom_status_panel.size = Vector2(maxf(1.0, minf(310.0, viewport_size.x - 32.0)), 62.0)
-	stats_label.position = bottom_status_panel.position + Vector2(12.0, 7.0)
-	stats_label.size = Vector2(maxf(1.0, bottom_status_panel.size.x - 24.0), 24.0)
-	status_label.position = bottom_status_panel.position + Vector2(12.0, 34.0)
-	status_label.size = Vector2(maxf(1.0, bottom_status_panel.size.x - 24.0), 22.0)
+	stats_label.position = Vector2(16.0, 14.0)
+	stats_label.size = Vector2(150.0, 34.0)
+	status_label.position = Vector2(maxf(1.0, viewport_size.x - 210.0), 14.0)
+	status_label.size = Vector2(194.0, 34.0)
+	hq_health_bar.position = Vector2(16.0, 50.0)
+	hq_health_bar.size = Vector2(142.0, 10.0)
+	building_damage_edge_soft.position = Vector2.ZERO
+	building_damage_edge_soft.size = viewport_size
+	building_damage_edge.position = Vector2.ZERO
+	building_damage_edge.size = viewport_size
 	timer_label.position = Vector2(120.0, 62.0)
 	timer_label.size = Vector2(maxf(1.0, viewport_size.x - 240.0), 42.0)
 	var banner_width := maxf(1.0, minf(560.0, viewport_size.x - 32.0))
@@ -1095,7 +1297,7 @@ func _layout_ui() -> void:
 	bombardment_banner.size = Vector2(banner_width, 46.0)
 	bombardment_banner_label.position = Vector2(12, 0)
 	bombardment_banner_label.size = Vector2(maxf(0.0, bombardment_banner.size.x - 24), bombardment_banner.size.y)
-	hint_container.position = Vector2(20.0, maxf(170.0, viewport_size.y - 178.0))
+	hint_container.position = Vector2(20.0, maxf(150.0, viewport_size.y - 220.0))
 	hint_container.size = Vector2(minf(420.0, maxf(1.0, viewport_size.x - 300.0)), PERSONAL_HINT_LINE_HEIGHT * PERSONAL_HINT_VISIBLE_LINES)
 	for line in hint_container.get_children():
 		line.size = Vector2(hint_container.size.x, PERSONAL_HINT_LINE_HEIGHT)
@@ -1104,9 +1306,9 @@ func _layout_ui() -> void:
 	end_label.size = Vector2(end_panel.size.x - 40, 110)
 	restart_button.position = Vector2((end_panel.size.x - 160) * 0.5, 190)
 	if cat_companion != null:
-		cat_companion.size = Vector2(viewport_size.x, 300.0)
+		cat_companion.size = Vector2(viewport_size.x, 340.0)
 		cat_companion.position = Vector2.ZERO
-		cat_companion.position.y = maxf(8.0, viewport_size.y - 308.0)
+		cat_companion.position.y = maxf(8.0, viewport_size.y - 348.0)
 		cat_companion.call("set_viewport_size", viewport_size)
 	update_camera_guides()
 
@@ -1114,11 +1316,13 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_SIZE_CHANGED:
 		_layout_ui()
 
-func update_state(time_left: float, player_gold: int, ai_gold: int, player_hp: float, ai_hp: float, player_tiles: int, ai_tiles: int) -> void:
+func update_state(time_left: float, player_gold: int, _ai_gold: int, player_hp: float, _ai_hp: float, player_tiles: int, ai_tiles: int) -> void:
 	if stats_label == null:
 		return
 	stats_label.text = "金币  %d" % player_gold
-	status_label.text = "我方主城  %03d HP    领地  %02d : %02d" % [int(player_hp), player_tiles, ai_tiles]
+	status_label.text = "领地  %02d : %02d" % [player_tiles, ai_tiles]
+	hq_health_bar.value = clampf(player_hp, 0.0, Config.HQ_MAX_HP)
+	hq_health_bar.visible = player_hp < Config.HQ_MAX_HP - 0.01
 	var total_seconds := maxi(0, int(ceil(time_left)))
 	var minutes := total_seconds / 60
 	var seconds := total_seconds % 60
@@ -1156,6 +1360,24 @@ func show_bombardment_banner(message: String) -> void:
 func hide_bombardment_banner() -> void:
 	bombardment_banner_message = ""
 	_refresh_broadcast_banner()
+
+func flash_building_damage() -> void:
+	if building_damage_edge == null or building_damage_edge_soft == null:
+		return
+	if building_damage_edge_tween != null and building_damage_edge_tween.is_valid():
+		building_damage_edge_tween.kill()
+	building_damage_edge.visible = true
+	building_damage_edge_soft.visible = true
+	building_damage_edge.modulate.a = 1.0
+	building_damage_edge_soft.modulate.a = 1.0
+	building_damage_edge_tween = create_tween()
+	building_damage_edge_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	building_damage_edge_tween.tween_property(building_damage_edge, "modulate:a", 0.0, 0.30)
+	building_damage_edge_tween.parallel().tween_property(building_damage_edge_soft, "modulate:a", 0.0, 0.30)
+	building_damage_edge_tween.tween_callback(func() -> void:
+		building_damage_edge.visible = false
+		building_damage_edge_soft.visible = false
+	)
 
 func show_world_broadcast(message: String, duration: float = Config.INTELLIGENCE_BROADCAST_DURATION) -> void:
 	world_broadcast_message = message

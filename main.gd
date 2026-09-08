@@ -53,6 +53,8 @@ var equipped_items := {
 	PLAYER: ["", "", "", "", ""],
 	AI: ["", "", "", "", ""]
 }
+var item_inventory: Array[String] = []
+var ai_card_inventory: Array[String] = []
 var equipment_drop_queue: Array[Dictionary] = []
 var pending_equipment_replacement: Dictionary = {}
 var pending_card_land_loss: Dictionary = {}
@@ -103,7 +105,11 @@ func _ready() -> void:
 	ai_controller.setup(self)
 	hud.setup(self)
 	hud.card_event_finished.connect(_on_card_event_finished)
+	hud.card_draw_finished.connect(_on_card_draw_finished)
 	hud.merchant_item_selected.connect(_on_merchant_item_selected)
+	hud.merchant_dismissed.connect(_on_merchant_dismissed)
+	hud.inventory_item_dropped.connect(_on_inventory_item_dropped)
+	hud.set_item_inventory(item_inventory)
 	board.focus_camera_on_cell(player_hq)
 	_refresh_purchase_cells()
 	_update_hud()
@@ -263,8 +269,12 @@ func _damage_bombardment_building(cell: Vector2i) -> void:
 			board.destroy_building(cell)
 	elif building == MINE or building == TOWER or building == STEEL_BARRIER:
 		board.destroy_building(cell)
+	elif building == MERCHANT:
+		_dismiss_merchant(cell)
 	else:
 		return
+	if hud != null:
+		hud.flash_building_damage()
 	_check_building_result()
 
 func _process_hq_dispatch() -> void:
@@ -295,6 +305,8 @@ func restart_game() -> void:
 		PLAYER: ["", "", "", "", ""],
 		AI: ["", "", "", "", ""]
 	}
+	item_inventory.clear()
+	ai_card_inventory.clear()
 	equipment_drop_queue.clear()
 	pending_equipment_replacement.clear()
 	if card_land_loss_tween != null and card_land_loss_tween.is_valid():
@@ -342,6 +354,7 @@ func restart_game() -> void:
 	active_item_cell = INVALID_CELL
 	merchant_shop_cell = INVALID_CELL
 	hud.hide_merchant_shop()
+	hud.set_item_inventory(item_inventory)
 	last_hud_time = -1
 	last_hud_player_gold = -1
 	last_hud_ai_gold = -1
@@ -383,10 +396,10 @@ func _on_tile_clicked(cell: Vector2i) -> void:
 		return
 	if bool(tile.get("revealed", false)) and int(tile.get("owner", EMPTY)) == PLAYER:
 		var ground_item_id := str(tile.get("ground_item_id", ""))
-		if not ground_item_id.is_empty() and MerchantDataScript.ITEM_IDS.has(ground_item_id):
+		if not ground_item_id.is_empty() and MerchantDataScript.is_card(ground_item_id):
 			active_item_id = ground_item_id
 			active_item_cell = cell
-			last_message = "已选择道具：%s，请点击目标地块使用；再次点击此处可取消。" % MerchantDataScript.get_item_name(ground_item_id)
+			last_message = "已选择卡片：%s，请点击目标地块使用；再次点击此处可取消。" % MerchantDataScript.get_item_name(ground_item_id)
 			_update_hud()
 			return
 	if selected_barracks != Vector2i(999, 999):
@@ -660,7 +673,7 @@ func _apply_tile_result(owner: int, cell: Vector2i, result: Dictionary, trigger_
 		_register_building(owner)
 	if building == BARRACKS:
 		_reset_barracks_production_timer(cell)
-	if trigger_fate and int(board.tiles[cell]["tile_type"]) == Config.FATE_TILE_TYPE:
+	if trigger_fate and _is_fate_tile(cell):
 		board.tiles[cell]["fate_event_active"] = true
 		_trigger_random_event(owner, cell)
 
@@ -689,12 +702,12 @@ func _on_tile_reveal_finished(cell: Vector2i) -> void:
 	if owner == PLAYER and not bool(pending["free_reveal"]) and not bool(pending.get("chest_claimed", false)):
 		last_message = "我方购买并解锁了 %s，消耗 %d 金币。" % [_building_name(int(pending["result"]["building"])), int(pending["cost"])]
 	var random_event_type: int = int(pending["result"].get("random_event", -1))
-	if bool(pending["trigger_fate"]) and random_event_type >= 0:
-		board.tiles[cell]["fate_event_active"] = true
-		_trigger_random_event(owner, cell, random_event_type)
-	elif bool(pending["trigger_fate"]) and int(tile.get("tile_type", Config.RANDOM_TILE_TYPE)) == Config.FATE_TILE_TYPE:
+	if bool(pending["trigger_fate"]) and _is_fate_tile(cell):
 		board.tiles[cell]["fate_event_active"] = true
 		_trigger_random_event(owner, cell)
+	elif bool(pending["trigger_fate"]) and random_event_type >= 0:
+		board.tiles[cell]["fate_event_active"] = true
+		_trigger_random_event(owner, cell, random_event_type)
 	var fate_origin: Vector2i = pending["fate_origin"]
 	if fate_origin != INVALID_CELL:
 		_resolve_fate_reveal(fate_origin, cell)
@@ -725,7 +738,7 @@ func _trigger_random_event(owner: int, fate_cell: Vector2i, forced_event_type: i
 	if event_type < 0:
 		# Fate tiles now only trigger the card event. Bomb, plane and chest
 		# monster events are rolled by ordinary random tiles instead.
-		if not board.has_cell(fate_cell) or int(board.tiles[fate_cell]["tile_type"]) != Config.FATE_TILE_TYPE:
+		if not _is_fate_tile(fate_cell):
 			return
 		event_type = Config.RANDOM_EVENT_CARD
 	match event_type:
@@ -739,6 +752,40 @@ func _trigger_random_event(owner: int, fate_cell: Vector2i, forced_event_type: i
 			_trigger_card_event(owner, fate_cell)
 		Config.RANDOM_EVENT_INTELLIGENCE:
 			_trigger_intelligence_event(owner, fate_cell)
+		Config.RANDOM_EVENT_DISPLAY_CARD:
+			_trigger_display_only_card_event(owner, fate_cell)
+
+func _trigger_display_only_card_event(owner: int, cell: Vector2i) -> void:
+	var card_id := _roll_card_id()
+	if owner == PLAYER and hud != null and hud.has_method("play_card_draw"):
+		hud.play_card_draw(owner, card_id, cell)
+	else:
+		_grant_card(owner, card_id)
+		_finish_fate_event(cell)
+
+func _roll_card_id() -> String:
+	var card_ids: Array = MerchantDataScript.CARD_IDS
+	if card_ids.is_empty():
+		return ""
+	return str(card_ids[rng.randi_range(0, card_ids.size() - 1)])
+
+func _grant_card(owner: int, card_id: String, fly_origin := Vector2(-1.0, -1.0)) -> bool:
+	if not MerchantDataScript.is_card(card_id):
+		return false
+	if owner == PLAYER:
+		if item_inventory.size() >= 8:
+			last_message = "卡片背包已满，抽到的卡片无法收入背包。"
+			_update_hud()
+			return false
+		item_inventory.append(card_id)
+		if hud != null:
+			hud.set_item_inventory(item_inventory, card_id, fly_origin)
+		last_message = "获得卡片：%s，拖动卡片到目标地块使用。" % MerchantDataScript.get_item_name(card_id)
+		_update_hud()
+		return true
+	if ai_card_inventory.size() < 8:
+		ai_card_inventory.append(card_id)
+	return true
 
 func _trigger_intelligence_event(owner: int, origin: Vector2i) -> void:
 	var intelligence_type := _roll_intelligence_type()
@@ -958,8 +1005,16 @@ func _trigger_card_event(owner: int, fate_cell: Vector2i) -> void:
 			_finish_fate_event(fate_cell)
 
 func _on_card_event_finished(owner: int, card_type: int, fate_cell: Vector2i) -> void:
-	if not _apply_card_event(owner, card_type, fate_cell):
+	if card_type == Config.RANDOM_EVENT_DISPLAY_CARD:
 		_finish_fate_event(fate_cell)
+	elif not _apply_card_event(owner, card_type, fate_cell):
+		_finish_fate_event(fate_cell)
+	board.queue_redraw()
+
+func _on_card_draw_finished(owner: int, card_id: String, fate_cell: Vector2i) -> void:
+	_grant_card(owner, card_id)
+	_finish_fate_event(fate_cell)
+	_refresh_purchase_cells()
 	board.queue_redraw()
 
 func _apply_card_event(owner: int, card_type: int, fate_cell: Vector2i = INVALID_CELL) -> bool:
@@ -1288,7 +1343,9 @@ func _on_fate_effect_finished(effect: FateEvent, event_type: int, owner: int, or
 				if _reveal_free_tile(owner, cell, false, origin):
 					pending_cells.append(cell)
 		Config.RANDOM_EVENT_PLANE:
-			if _reveal_free_tile(owner, target, false, origin):
+			# A plane can reveal a fate tile; allow the revealed target to start
+			# its normal fate-card flow after the reveal animation completes.
+			if _reveal_free_tile(owner, target, true, origin):
 				pending_cells.append(target)
 		Config.RANDOM_EVENT_CHEST_MONSTER:
 			if board.has_cell(target) and not bool(board.tiles[target]["revealed"]):
@@ -1329,8 +1386,14 @@ func _damage_bomb_building(cell: Vector2i, notify_player := true) -> void:
 		board.destroy_building(cell)
 		if notify_player:
 			last_message = "炸弹摧毁了敌方%s。" % _building_name(building)
+	elif building == MERCHANT:
+		_dismiss_merchant(cell)
+		if notify_player:
+			last_message = "炸弹摧毁了商人。"
 	else:
 		return
+	if hud != null:
+		hud.flash_building_damage()
 	_check_building_result()
 
 func _resolve_fate_reveal(origin: Vector2i, cell: Vector2i) -> void:
@@ -1358,36 +1421,61 @@ func _finish_fate_event(fate_cell: Vector2i) -> void:
 	board.queue_redraw()
 
 func _roll_tile_result(tile: Dictionary) -> Dictionary:
-	var roll := rng.randf()
 	if not bool(tile.get("revealed", false)) and int(tile.get("building", EMPTY)) != EMPTY:
 		return {
 			"building": int(tile["building"]),
 			"level": int(tile.get("building_level", 0)),
 			"unit_class": int(tile.get("unit_class", -1))
 		}
-	match int(tile.get("tile_type", Config.RANDOM_TILE_TYPE)):
-		Config.BARRACKS_2_TILE_TYPE:
-			return {"building": BARRACKS, "level": 2, "unit_class": _random_unit_class()}
-		Config.MINE_TILE_TYPE:
-			return {"building": MINE, "level": 0, "unit_class": -1}
-		Config.FATE_TILE_TYPE:
-			return {"building": EMPTY, "level": 0, "unit_class": -1}
-		Config.WILD_MONSTER_TILE_TYPE:
-			return {"building": EMPTY, "level": 0, "unit_class": -1, "monster": true}
-		Config.MERCHANT_TILE_TYPE:
-			return {"building": MERCHANT, "level": 0, "unit_class": -1}
-	# Random tile: level 1 barracks 95%, intelligence 1%, bomb 1%, plane 2%, chest monster 1%.
-	# Ordinary random tiles never produce an empty tile or a higher-level barracks.
-	if roll < Config.RANDOM_LEVEL_ONE_BARRACKS_RESULT_WEIGHT:
-		return {"building": BARRACKS, "level": 1, "unit_class": _random_unit_class()}
-	var intelligence_threshold := Config.RANDOM_LEVEL_ONE_BARRACKS_RESULT_WEIGHT + Config.RANDOM_INTELLIGENCE_EVENT_WEIGHT
-	if roll < intelligence_threshold:
-		return {"building": EMPTY, "level": 0, "unit_class": -1, "random_event": Config.RANDOM_EVENT_INTELLIGENCE}
-	if roll < intelligence_threshold + Config.RANDOM_BOMB_EVENT_WEIGHT:
-		return {"building": EMPTY, "level": 0, "unit_class": -1, "random_event": Config.RANDOM_EVENT_BOMB}
-	if roll < intelligence_threshold + Config.RANDOM_BOMB_EVENT_WEIGHT + Config.RANDOM_PLANE_EVENT_WEIGHT:
+	match int(tile.get("tile_type", Config.BARRACKS_TILE_TYPE)):
+		Config.BARRACKS_TILE_TYPE:
+			return {"building": BARRACKS, "level": 1, "unit_class": _random_unit_class()}
+		Config.QUESTION_TILE_TYPE:
+			return _roll_question_tile_result(tile)
+		Config.VISIBLE_TILE_TYPE:
+			return _roll_visible_tile_result(tile)
+	return {"building": BARRACKS, "level": 1, "unit_class": _random_unit_class()}
+
+func _roll_question_tile_result(_tile: Dictionary) -> Dictionary:
+	var roll := rng.randf()
+	var threshold := Config.QUESTION_EMPTY_WEIGHT
+	if roll < threshold:
+		return {"building": EMPTY, "level": 0, "unit_class": -1}
+	threshold += Config.QUESTION_PLANE_WEIGHT
+	if roll < threshold:
 		return {"building": EMPTY, "level": 0, "unit_class": -1, "random_event": Config.RANDOM_EVENT_PLANE}
-	return {"building": EMPTY, "level": 0, "unit_class": -1, "random_event": Config.RANDOM_EVENT_CHEST_MONSTER}
+	threshold += Config.QUESTION_BOMB_WEIGHT
+	if roll < threshold:
+		return {"building": EMPTY, "level": 0, "unit_class": -1, "random_event": Config.RANDOM_EVENT_BOMB}
+	threshold += Config.QUESTION_CARD_WEIGHT
+	if roll < threshold:
+		return {"building": EMPTY, "level": 0, "unit_class": -1, "random_event": Config.RANDOM_EVENT_DISPLAY_CARD}
+	threshold += Config.QUESTION_WILD_MONSTER_WEIGHT
+	if roll < threshold:
+		return {"building": EMPTY, "level": 0, "unit_class": -1, "monster": true}
+	threshold += Config.QUESTION_CHEST_MONSTER_WEIGHT
+	if roll < threshold:
+		return {"building": EMPTY, "level": 0, "unit_class": -1, "random_event": Config.RANDOM_EVENT_CHEST_MONSTER}
+	threshold += Config.QUESTION_LEVEL_ONE_BARRACKS_WEIGHT
+	if roll < threshold:
+		return {"building": BARRACKS, "level": 1, "unit_class": _random_unit_class()}
+	return {"building": MERCHANT, "level": 0, "unit_class": -1}
+
+func _roll_visible_tile_result(tile: Dictionary) -> Dictionary:
+	match int(tile.get("visible_tile_result", Config.VISIBLE_FATE)):
+		Config.VISIBLE_WILD_MONSTER:
+			return {"building": EMPTY, "level": 0, "unit_class": -1, "monster": true}
+		Config.VISIBLE_MINE:
+			return {"building": MINE, "level": 0, "unit_class": -1}
+		Config.VISIBLE_LEVEL_TWO_BARRACKS:
+			return {"building": BARRACKS, "level": 2, "unit_class": _random_unit_class()}
+	return {"building": EMPTY, "level": 0, "unit_class": -1}
+
+func _is_fate_tile(cell: Vector2i) -> bool:
+	if not board.has_cell(cell):
+		return false
+	var tile: Dictionary = board.tiles[cell]
+	return int(tile.get("tile_type", -1)) == Config.VISIBLE_TILE_TYPE and int(tile.get("visible_tile_result", -1)) == Config.VISIBLE_FATE
 
 func _random_unit_class() -> int:
 	return rng.randi_range(0, Config.UNIT_CLASS_COUNT - 1)
@@ -1420,83 +1508,193 @@ func _on_merchant_item_selected(index: int) -> void:
 	if not bool(tile.get("merchant_active", false)) or index < 0 or index >= stock.size():
 		return
 	var item_id := str(stock[index])
-	if not MerchantDataScript.ITEM_IDS.has(item_id):
+	if not MerchantDataScript.CARD_IDS.has(item_id):
+		return
+	if item_inventory.size() >= 8:
+		last_message = "卡片背包已满，最多携带 8 张卡片。"
+		_update_hud()
 		return
 	if gold[PLAYER] < Config.MERCHANT_ITEM_COST:
-		last_message = "金币不足，道具需要 %d 金币。" % Config.MERCHANT_ITEM_COST
+		last_message = "金币不足，卡片需要 %d 金币。" % Config.MERCHANT_ITEM_COST
 		_update_hud()
 		return
 	gold[PLAYER] -= Config.MERCHANT_ITEM_COST
-	tile["merchant_active"] = false
-	tile["merchant_stock"] = []
-	tile["ground_item_id"] = item_id
-	board.set_building(cell, EMPTY)
-	merchant_shop_cell = INVALID_CELL
-	hud.hide_merchant_shop()
-	last_message = "获得道具：%s。点击地面道具后选择目标使用。" % MerchantDataScript.get_item_name(item_id)
+	var item_origin := hud.get_merchant_item_screen_position(index)
+	stock.remove_at(index)
+	tile["merchant_stock"] = stock
+	item_inventory.append(item_id)
+	hud.set_item_inventory(item_inventory, item_id, item_origin)
+	last_message = "获得卡片：%s，已收入卡片背包。拖动卡片到目标地块使用。" % MerchantDataScript.get_item_name(item_id)
+	if stock.is_empty():
+		_dismiss_merchant(cell)
+	else:
+		hud.show_merchant_shop(stock)
 	_refresh_purchase_cells()
 	_update_hud()
 	board.queue_redraw()
 
+func _dismiss_merchant(cell: Vector2i) -> void:
+	if not board.has_cell(cell):
+		return
+	var tile: Dictionary = board.tiles[cell]
+	if int(tile.get("building", EMPTY)) == MERCHANT or bool(tile.get("merchant_active", false)):
+		tile["merchant_active"] = false
+		tile["merchant_stock"] = []
+		tile["ground_item_id"] = ""
+		board.destroy_building(cell)
+	if merchant_shop_cell == cell:
+		merchant_shop_cell = INVALID_CELL
+		if hud != null:
+			hud.hide_merchant_shop()
+	board.queue_redraw()
+
+func _on_merchant_dismissed() -> void:
+	if game_over or merchant_shop_cell == INVALID_CELL:
+		return
+	_dismiss_merchant(merchant_shop_cell)
+	last_message = "商人已被驱赶。"
+	_update_hud()
+
+func _on_inventory_item_dropped(item_id: String, screen_position: Vector2) -> void:
+	if game_over or not MerchantDataScript.is_card(item_id) or not item_inventory.has(item_id):
+		return
+	var canvas_world := get_viewport().get_canvas_transform().affine_inverse() * screen_position
+	var board_position := board.to_local(canvas_world)
+	var target_cell := board.world_to_axial(board_position)
+	if not board.has_cell(target_cell):
+		last_message = "请将卡片拖到地图上的目标地块。"
+		_update_hud()
+		return
+	active_item_id = item_id
+	active_item_cell = INVALID_CELL
+	_try_use_active_item(target_cell)
+	if active_item_id == item_id and active_item_cell == INVALID_CELL:
+		_clear_active_item()
+
 func _try_use_active_item(target_cell: Vector2i) -> void:
 	if active_item_id.is_empty():
 		return
-	if not board.has_cell(active_item_cell):
-		_clear_active_item("地面道具已不可用。")
-		return
-	var source_tile: Dictionary = board.tiles[active_item_cell]
-	if str(source_tile.get("ground_item_id", "")) != active_item_id or int(source_tile.get("owner", EMPTY)) != PLAYER:
-		_clear_active_item("地面道具已不可用。")
-		return
-	if target_cell == active_item_cell:
-		_clear_active_item("已取消道具使用。")
-		return
+	var inventory_item := active_item_cell == INVALID_CELL
+	if inventory_item:
+		if not item_inventory.has(active_item_id):
+			_clear_active_item("卡片已不可用。")
+			return
+	else:
+		if not board.has_cell(active_item_cell):
+			_clear_active_item("地面卡片已不可用。")
+			return
+		var source_tile: Dictionary = board.tiles[active_item_cell]
+		if str(source_tile.get("ground_item_id", "")) != active_item_id or int(source_tile.get("owner", EMPTY)) != PLAYER:
+			_clear_active_item("地面卡片已不可用。")
+			return
+		if target_cell == active_item_cell:
+			_clear_active_item("已取消卡片使用。")
+			return
 	if not board.has_cell(target_cell) or is_bombardment_locked(target_cell) or _is_card_land_loss_locked(target_cell):
-		last_message = "该地块当前无法使用道具。"
+		last_message = "该地块当前无法使用卡片。"
 		_update_hud()
 		return
 	var used := false
-	match active_item_id:
-		MerchantDataScript.ITEM_DRAGON:
-			if _is_enemy_building(target_cell, PLAYER):
-				board.destroy_building(target_cell)
-				_check_building_result()
-				used = true
-		MerchantDataScript.ITEM_UPGRADE:
-			if bool(board.tiles[target_cell].get("revealed", false)) and int(board.tiles[target_cell].get("owner", EMPTY)) == PLAYER and int(board.tiles[target_cell].get("building", EMPTY)) == BARRACKS:
-				var level := board.get_building_level(target_cell)
-				if level < MAX_BARRACKS_LEVEL:
-					var production_count := board.get_production_count(target_cell)
-					var build_timer := board.get_build_timer(target_cell)
-					board.set_building(target_cell, BARRACKS, level + 1, board.get_building_unit_class(target_cell))
-					board.set_production_count(target_cell, production_count)
-					board.update_build_timer(target_cell, build_timer)
-					_play_barracks_upgrade_effect(target_cell, level + 1)
-					used = true
-		MerchantDataScript.ITEM_STEEL_BARRIER:
-			if bool(board.tiles[target_cell].get("revealed", false)) and int(board.tiles[target_cell].get("owner", EMPTY)) == PLAYER and int(board.tiles[target_cell].get("building", EMPTY)) == EMPTY and str(board.tiles[target_cell].get("ground_item_id", "")).is_empty() and not bool(board.tiles[target_cell].get("monster_active", false)):
-				board.set_building(target_cell, STEEL_BARRIER, 1)
-				board.set_tile_owner(target_cell, PLAYER, true)
-				_register_building(PLAYER)
-				used = true
-		MerchantDataScript.ITEM_BLIZZARD:
-			for unit in units:
-				if is_instance_valid(unit) and unit.faction == AI and board.cube_distance(unit.cell, target_cell) <= Config.MERCHANT_STORM_RADIUS:
-					unit.freeze_for(Config.MERCHANT_STORM_DURATION)
+	var replacement_card_id := ""
+	if MerchantDataScript.is_sealed_barracks_card(active_item_id):
+		var sealed_tile: Dictionary = board.tiles[target_cell]
+		if target_cell != player_hq and target_cell != ai_hq and bool(sealed_tile.get("revealed", false)) and int(sealed_tile.get("owner", EMPTY)) == PLAYER and int(sealed_tile.get("building", EMPTY)) == EMPTY and not bool(sealed_tile.get("monster_active", false)) and str(sealed_tile.get("ground_item_id", "")).is_empty():
+			var sealed_level := MerchantDataScript.get_sealed_barracks_level(active_item_id)
+			var sealed_class := MerchantDataScript.get_sealed_barracks_class(active_item_id)
+			board.set_building(target_cell, BARRACKS, sealed_level, sealed_class)
+			board.set_production_count(target_cell, 0)
+			board.update_build_timer(target_cell, Config.BARRACKS_PRODUCTION_INTERVAL)
+			_register_building(PLAYER)
 			used = true
-		MerchantDataScript.ITEM_TRANSFER_CERTIFICATE:
-			if _is_enemy_building(target_cell, PLAYER) and int(board.tiles[target_cell].get("building", EMPTY)) == BARRACKS:
-				board.set_tile_owner(target_cell, PLAYER, true)
+	else:
+		match active_item_id:
+			MerchantDataScript.ITEM_DRAGON:
+				if _is_enemy_building(target_cell, PLAYER):
+					board.destroy_building(target_cell)
+					_check_building_result()
+					used = true
+			MerchantDataScript.ITEM_UPGRADE:
+				if bool(board.tiles[target_cell].get("revealed", false)) and int(board.tiles[target_cell].get("owner", EMPTY)) == PLAYER and int(board.tiles[target_cell].get("building", EMPTY)) == BARRACKS:
+					var level := board.get_building_level(target_cell)
+					if level < MAX_BARRACKS_LEVEL:
+						var production_count := board.get_production_count(target_cell)
+						var build_timer := board.get_build_timer(target_cell)
+						board.set_building(target_cell, BARRACKS, level + 1, board.get_building_unit_class(target_cell))
+						board.set_production_count(target_cell, production_count)
+						board.update_build_timer(target_cell, build_timer)
+						_play_barracks_upgrade_effect(target_cell, level + 1)
+						used = true
+			MerchantDataScript.ITEM_STEEL_BARRIER:
+				if bool(board.tiles[target_cell].get("revealed", false)) and int(board.tiles[target_cell].get("owner", EMPTY)) == PLAYER and int(board.tiles[target_cell].get("building", EMPTY)) == EMPTY and str(board.tiles[target_cell].get("ground_item_id", "")).is_empty() and not bool(board.tiles[target_cell].get("monster_active", false)):
+					board.set_building(target_cell, STEEL_BARRIER, 1)
+					board.set_tile_owner(target_cell, PLAYER, true)
+					_register_building(PLAYER)
+					used = true
+			MerchantDataScript.ITEM_BLIZZARD:
+				for unit in units:
+					if is_instance_valid(unit) and unit.faction == AI and board.cube_distance(unit.cell, target_cell) <= Config.MERCHANT_STORM_RADIUS:
+						unit.freeze_for(Config.MERCHANT_STORM_DURATION)
 				used = true
+			MerchantDataScript.ITEM_TRANSFER_CERTIFICATE:
+				if _is_enemy_building(target_cell, PLAYER) and int(board.tiles[target_cell].get("building", EMPTY)) == BARRACKS:
+					board.set_tile_owner(target_cell, PLAYER, true)
+					used = true
+			MerchantDataScript.ITEM_OCCUPY:
+				var occupy_tile: Dictionary = board.tiles[target_cell]
+				if target_cell != player_hq and target_cell != ai_hq and int(occupy_tile.get("owner", EMPTY)) != PLAYER and not bool(occupy_tile.get("monster_active", false)) and bool(occupy_tile.get("revealed", false)):
+					var occupy_level := 1
+					if int(occupy_tile.get("building", EMPTY)) == BARRACKS:
+						occupy_level = clampi(int(occupy_tile.get("building_level", 1)), 1, MAX_BARRACKS_LEVEL)
+					board.set_building(target_cell, BARRACKS, occupy_level, _random_unit_class())
+					board.set_tile_owner(target_cell, PLAYER, true)
+					_register_building(PLAYER)
+					used = true
+			MerchantDataScript.ITEM_BUILD:
+				if bool(board.tiles[target_cell].get("revealed", false)) and int(board.tiles[target_cell].get("owner", EMPTY)) == PLAYER and int(board.tiles[target_cell].get("building", EMPTY)) == EMPTY and not bool(board.tiles[target_cell].get("monster_active", false)) and str(board.tiles[target_cell].get("ground_item_id", "")).is_empty():
+					board.set_building(target_cell, BARRACKS, 1, _random_unit_class())
+					_register_building(PLAYER)
+					used = true
+			MerchantDataScript.ITEM_RECYCLE:
+				replacement_card_id = _seal_barracks_with_recycle_card(target_cell)
+				used = not replacement_card_id.is_empty()
 	if used:
 		var used_name := MerchantDataScript.get_item_name(active_item_id)
-		board.tiles[active_item_cell]["ground_item_id"] = ""
-		_clear_active_item("已使用道具：%s。" % used_name)
+		if inventory_item:
+			item_inventory.erase(active_item_id)
+			if not replacement_card_id.is_empty() and item_inventory.size() < 8:
+				item_inventory.append(replacement_card_id)
+			hud.set_item_inventory(item_inventory)
+		else:
+			board.tiles[active_item_cell]["ground_item_id"] = ""
+		_clear_active_item("已使用卡片：%s。" % used_name)
 		_refresh_purchase_cells()
 		board.queue_redraw()
 	else:
-		last_message = "该道具无法对这个目标使用。"
+		if active_item_id == MerchantDataScript.ITEM_RECYCLE:
+			last_message = "回收卡必须拖到一座兵营上使用。"
+		else:
+			last_message = "该卡片无法对这个目标使用。"
 		_update_hud()
+
+func _seal_barracks_with_recycle_card(target_cell: Vector2i) -> String:
+	if not board.has_cell(target_cell) or target_cell == player_hq or target_cell == ai_hq:
+		return ""
+	if is_bombardment_locked(target_cell) or _is_card_land_loss_locked(target_cell):
+		return ""
+	var tile: Dictionary = board.tiles[target_cell]
+	if not bool(tile.get("revealed", false)) or int(tile.get("building", EMPTY)) != BARRACKS:
+		return ""
+	var recycle_level := board.get_building_level(target_cell)
+	var recycle_class := board.get_building_unit_class(target_cell)
+	var sealed_card_id := MerchantDataScript.make_sealed_barracks_card(recycle_level, recycle_class)
+	var recycle_owner := int(tile.get("owner", EMPTY))
+	for unit in units:
+		if not is_instance_valid(unit) or unit.home_cell != target_cell:
+			continue
+		unit.home_cell = player_hq if recycle_owner == PLAYER else ai_hq
+		unit.destination = unit.home_cell
+	board.set_building(target_cell, EMPTY)
+	return sealed_card_id
 
 func _clear_active_item(message: String = "") -> void:
 	active_item_id = ""
@@ -1855,6 +2053,8 @@ func unit_arrived(unit: BattleUnit) -> void:
 				return
 			var destroyed_building := int(tile["building"])
 			board.destroy_building(unit.cell)
+			if hud != null:
+				hud.flash_building_damage()
 			if unit.faction == PLAYER:
 				last_message = "我方士兵摧毁了敌方%s。" % _building_name(destroyed_building)
 			_check_building_result()
@@ -2124,6 +2324,8 @@ func damage_building(cell: Vector2i, amount: float, attacker_owner := 0) -> void
 			last_message = "我方士兵摧毁了敌方%s。" % _building_name(building)
 	else:
 		board.set_building_hp(cell, hp)
+	if hud != null:
+		hud.flash_building_damage()
 	_check_building_result()
 	board.queue_redraw()
 

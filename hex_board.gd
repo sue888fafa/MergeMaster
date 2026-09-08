@@ -34,7 +34,6 @@ var tile_size := 50.0
 var board_origin := Vector2(640.0, 430.0)
 var tiles: Dictionary = {}
 var draw_cells: Array[Vector2i] = []
-var wild_monster_cells: Array[Vector2i] = []
 var map_min_world := Vector2.ZERO
 var map_max_world := Vector2.ZERO
 var buildable_cells: Array[Vector2i] = []
@@ -71,14 +70,13 @@ func _ready() -> void:
 func _build_map() -> void:
 	tiles.clear()
 	draw_cells.clear()
-	wild_monster_cells.clear()
-	_prepare_wild_monster_cells()
 	for q in range(-radius, radius + 1):
 		for r in range(-radius, radius + 1):
 			if abs(q + r) <= radius:
 				var cell := Vector2i(q, r)
 				tiles[cell] = {
-					"tile_type": _roll_tile_type(cell),
+					"tile_type": Config.BARRACKS_TILE_TYPE,
+					"visible_tile_result": -1,
 					"unit_class": -1,
 					"owner": UNKNOWN,
 					"revealed": false,
@@ -100,6 +98,10 @@ func _build_map() -> void:
 				}
 				draw_cells.append(cell)
 
+	# Assign the three map categories as one map-level distribution. This keeps
+	# question tiles reliable instead of allowing a visually empty random roll.
+	_assign_tile_types()
+
 	# Only the HQs are owned at the start; their six neighbors are the initial purchase frontier.
 	set_tile_owner(PLAYER_HQ, PLAYER, true)
 	set_tile_owner(AI_HQ, AI, true)
@@ -108,52 +110,51 @@ func _build_map() -> void:
 	)
 	_recalculate_map_bounds()
 
-func _prepare_wild_monster_cells() -> void:
+func _assign_tile_types() -> void:
 	var candidates: Array[Vector2i] = []
-	for q in range(-radius, radius + 1):
-		for r in range(-radius, radius + 1):
-			if abs(q + r) > radius:
-				continue
-			var cell := Vector2i(q, r)
-			if cell == PLAYER_HQ or cell == AI_HQ:
-				continue
-			if cube_distance(cell, PLAYER_HQ) < Config.VISIBLE_TILE_MIN_DISTANCE:
-				continue
-			candidates.append(cell)
-	var target_count := randi_range(Config.WILD_MONSTER_MIN_COUNT, Config.WILD_MONSTER_MAX_COUNT)
-	target_count = mini(target_count, candidates.size())
-	while wild_monster_cells.size() < target_count and not candidates.is_empty():
-		var candidate_index := randi_range(0, candidates.size() - 1)
-		wild_monster_cells.append(candidates[candidate_index])
-		candidates.remove_at(candidate_index)
+	for cell in tiles:
+		var typed_cell: Vector2i = cell
+		if typed_cell != PLAYER_HQ and typed_cell != AI_HQ:
+			candidates.append(typed_cell)
+	if candidates.is_empty():
+		return
 
-func _roll_tile_type(cell: Vector2i) -> int:
-	if wild_monster_cells.has(cell):
-		return Config.WILD_MONSTER_TILE_TYPE
-	var roll := randf()
-	var visible_allowed := cube_distance(cell, PLAYER_HQ) >= Config.VISIBLE_TILE_MIN_DISTANCE
-	if not visible_allowed:
-		# Near the player's base, redistribute visible-tile probability across
-		# the regular hidden/fate pool so the configured weights remain valid.
-		var hidden_weight := Config.RANDOM_TILE_TYPE_WEIGHT + Config.FATE_TILE_TYPE_WEIGHT
-		roll *= hidden_weight
-		if roll < Config.RANDOM_TILE_TYPE_WEIGHT:
-			return Config.RANDOM_TILE_TYPE
-		return Config.FATE_TILE_TYPE
+	var question_count: int = clampi(roundi(float(candidates.size()) * Config.QUESTION_TILE_TYPE_WEIGHT), 2, candidates.size())
+	var visible_count: int = clampi(roundi(float(candidates.size()) * Config.VISIBLE_TILE_TYPE_WEIGHT), 0, candidates.size() - question_count)
+	var forced_questions: Array[Vector2i] = []
+	for hq in [PLAYER_HQ, AI_HQ]:
+		var nearby: Array[Vector2i] = neighbors(hq)
+		nearby.shuffle()
+		for cell in nearby:
+			if candidates.has(cell) and not forced_questions.has(cell):
+				forced_questions.append(cell)
+				break
 
-	# Wild monster positions are reserved once per map. Normalize the remaining
-	# visible-tile weights so no additional monster can be rolled here.
-	var visible_weight := Config.RANDOM_TILE_TYPE_WEIGHT + Config.FATE_TILE_TYPE_WEIGHT + Config.BARRACKS_2_TILE_TYPE_WEIGHT + Config.MINE_TILE_TYPE_WEIGHT + Config.MERCHANT_TILE_TYPE_WEIGHT
-	roll *= visible_weight
-	if roll < Config.RANDOM_TILE_TYPE_WEIGHT:
-		return Config.RANDOM_TILE_TYPE
-	if roll < Config.RANDOM_TILE_TYPE_WEIGHT + Config.FATE_TILE_TYPE_WEIGHT:
-		return Config.FATE_TILE_TYPE
-	if roll < Config.RANDOM_TILE_TYPE_WEIGHT + Config.FATE_TILE_TYPE_WEIGHT + Config.BARRACKS_2_TILE_TYPE_WEIGHT:
-		return Config.BARRACKS_2_TILE_TYPE
-	if roll < Config.RANDOM_TILE_TYPE_WEIGHT + Config.FATE_TILE_TYPE_WEIGHT + Config.BARRACKS_2_TILE_TYPE_WEIGHT + Config.MINE_TILE_TYPE_WEIGHT:
-		return Config.MINE_TILE_TYPE
-	return Config.MERCHANT_TILE_TYPE
+	var question_cells: Array[Vector2i] = forced_questions.duplicate()
+	for cell in forced_questions:
+		candidates.erase(cell)
+	candidates.shuffle()
+	while question_cells.size() < question_count and not candidates.is_empty():
+		question_cells.append(candidates.pop_back())
+
+	for cell in question_cells:
+		tiles[cell]["tile_type"] = Config.QUESTION_TILE_TYPE
+		tiles[cell]["visible_tile_result"] = -1
+
+	candidates.shuffle()
+	for index in range(visible_count):
+		if candidates.is_empty():
+			break
+		var visible_cell: Vector2i = candidates.pop_back()
+		tiles[visible_cell]["tile_type"] = Config.VISIBLE_TILE_TYPE
+		tiles[visible_cell]["visible_tile_result"] = _roll_visible_tile_result()
+
+	for cell in candidates:
+		tiles[cell]["tile_type"] = Config.BARRACKS_TILE_TYPE
+		tiles[cell]["visible_tile_result"] = -1
+
+func _roll_visible_tile_result() -> int:
+	return randi_range(Config.VISIBLE_WILD_MONSTER, Config.VISIBLE_FATE)
 
 func reset() -> void:
 	_build_map()
@@ -256,13 +257,6 @@ func get_tile_cost(cell: Vector2i) -> int:
 	var tile: Dictionary = tiles.get(cell, {})
 	if bool(tile.get("intelligence_free_claim", false)):
 		return 0
-	match int(tile.get("tile_type", Config.RANDOM_TILE_TYPE)):
-		Config.FATE_TILE_TYPE:
-			return Config.FATE_TILE_COST
-		Config.MINE_TILE_TYPE:
-			return Config.MINE_TILE_COST
-		Config.BARRACKS_2_TILE_TYPE, Config.WILD_MONSTER_TILE_TYPE, Config.MERCHANT_TILE_TYPE:
-			return Config.VISIBLE_TILE_COST
 	return Config.RANDOM_TILE_COST
 
 func set_tile_owner(cell: Vector2i, owner: int, revealed := true) -> void:
@@ -790,13 +784,18 @@ func _draw_tile(cell: Vector2i) -> void:
 			if is_intelligence_building_drop_active(cell):
 				landmark_center += get_intelligence_building_drop_offset(cell)
 			_draw_hidden_building_landmark(landmark_center, int(tile["building"]), int(tile["building_level"]), int(tile["unit_class"]))
+		elif tile_type == Config.BARRACKS_TILE_TYPE and cell in purchasable_cells:
+			_draw_barracks_tile_landmark(center, not reveal_active)
+		elif tile_type == Config.QUESTION_TILE_TYPE and cell in purchasable_cells:
+			_draw_question_tile_landmark(center, not reveal_active)
 		elif _is_visible_tile_type(tile_type):
-			_draw_visible_landmark(tile_type, center, not reveal_active)
+			_draw_visible_landmark(int(tile.get("visible_tile_result", Config.VISIBLE_FATE)), center, not reveal_active)
 		if cell in purchasable_cells:
 			var tile_cost := get_tile_cost(cell)
 			var price_color := Color("#f87171") if player_gold < tile_cost else Color("#ffffff")
-			_draw_pickaxe_icon(center + Vector2(0.0, -14.0))
-			draw_string(ThemeDB.fallback_font, center + Vector2(-4, 16), str(tile_cost), HORIZONTAL_ALIGNMENT_LEFT, -1, 16, price_color)
+			# Keep the price row below the landmark: the small pickaxe sits just left of the number.
+			_draw_pickaxe_icon(center + Vector2(-11.0, 18.0), 0.55)
+			draw_string(ThemeDB.fallback_font, center + Vector2(-1.0, 24.0), str(tile_cost), HORIZONTAL_ALIGNMENT_LEFT, -1, 16, price_color)
 	else:
 		if not (cell == drag_start_cell and long_press_active):
 			var building_center := center
@@ -842,27 +841,89 @@ func _draw_ellipse(center: Vector2, radii: Vector2, color: Color) -> void:
 	draw_colored_polygon(points, color)
 
 func _is_visible_tile_type(tile_type: int) -> bool:
-	return tile_type == FATE or tile_type == WILD_MONSTER or tile_type == BARRACKS_2 or tile_type == MINE_TILE or tile_type == Config.MERCHANT_TILE_TYPE
+	return tile_type == Config.VISIBLE_TILE_TYPE
 
-func _draw_visible_landmark(tile_type: int, center: Vector2, use_local_transform := true) -> void:
+func _draw_visible_landmark(visible_result: int, center: Vector2, use_local_transform := true) -> void:
 	var landmark_origin := center + Config.VISIBLE_LANDMARK_OFFSET
 	var landmark_center := landmark_origin
 	if use_local_transform:
 		draw_set_transform(landmark_origin, 0.0, Vector2(Config.VISIBLE_LANDMARK_SCALE, Config.VISIBLE_LANDMARK_SCALE))
 		landmark_center = Vector2.ZERO
-	match tile_type:
-		FATE:
+	match visible_result:
+		Config.VISIBLE_FATE:
 			_draw_fate_card_landmark(landmark_center)
-		WILD_MONSTER:
+		Config.VISIBLE_WILD_MONSTER:
 			_draw_wild_landmark(landmark_center)
-		BARRACKS_2:
+		Config.VISIBLE_LEVEL_TWO_BARRACKS:
 			_draw_level_two_city_landmark(landmark_center)
-		MINE_TILE:
+		Config.VISIBLE_MINE:
 			_draw_mine_landmark(landmark_center)
-		Config.MERCHANT_TILE_TYPE:
-			_draw_merchant_landmark(landmark_center)
 	if use_local_transform:
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+func _draw_barracks_tile_landmark(center: Vector2, use_local_transform := true) -> void:
+	var landmark_origin := center + Config.VISIBLE_LANDMARK_OFFSET
+	var landmark_center := landmark_origin
+	if use_local_transform:
+		draw_set_transform(landmark_origin, 0.0, Vector2(Config.VISIBLE_LANDMARK_SCALE, Config.VISIBLE_LANDMARK_SCALE))
+		landmark_center = Vector2.ZERO
+	_draw_soldier_avatar(landmark_center)
+	if use_local_transform:
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+func _draw_question_tile_landmark(center: Vector2, use_local_transform := true) -> void:
+	var landmark_origin := center + Config.VISIBLE_LANDMARK_OFFSET
+	var landmark_center := landmark_origin
+	if use_local_transform:
+		draw_set_transform(landmark_origin, 0.0, Vector2(Config.VISIBLE_LANDMARK_SCALE, Config.VISIBLE_LANDMARK_SCALE))
+		landmark_center = Vector2.ZERO
+	var question := "?"
+	var question_position := landmark_center + Vector2(-10.5, 11.0)
+	# Use a large white glyph with a heavy dark outline; no colored badge surrounds it.
+	for offset in [
+		Vector2(-2.0, 0.0), Vector2(2.0, 0.0), Vector2(0.0, -2.0), Vector2(0.0, 2.0),
+		Vector2(-1.5, -1.5), Vector2(1.5, -1.5), Vector2(-1.5, 1.5), Vector2(1.5, 1.5)
+	]:
+		draw_string(ThemeDB.fallback_font, question_position + offset, question, HORIZONTAL_ALIGNMENT_LEFT, -1, 31, Color("#111827"))
+	draw_string(ThemeDB.fallback_font, question_position, question, HORIZONTAL_ALIGNMENT_LEFT, -1, 31, Color("#f8fafc"))
+	if use_local_transform:
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+func _draw_soldier_avatar(center: Vector2) -> void:
+	var black := Color("#111827")
+	var white := Color("#f8fafc")
+	# Keep the helmet centered on the tile and use a new open-face war helmet silhouette.
+	var helmet_center := center + Vector2(0.0, 7.0)
+	# Raised central ridge and side wings.
+	draw_colored_polygon(PackedVector2Array([
+		helmet_center + Vector2(-3.0, -21.0), helmet_center + Vector2(0.0, -28.0),
+		helmet_center + Vector2(3.0, -21.0), helmet_center + Vector2(7.0, -16.0),
+		helmet_center + Vector2(-7.0, -16.0)
+	]), black)
+	var dome := PackedVector2Array([
+		helmet_center + Vector2(-15.0, -5.0), helmet_center + Vector2(-13.0, -14.0),
+		helmet_center + Vector2(-7.0, -21.0), helmet_center + Vector2(0.0, -23.0),
+		helmet_center + Vector2(7.0, -21.0), helmet_center + Vector2(13.0, -14.0),
+		helmet_center + Vector2(15.0, -5.0), helmet_center + Vector2(11.0, -1.0),
+		helmet_center + Vector2(-11.0, -1.0)
+	])
+	draw_colored_polygon(dome, white)
+	draw_polyline(PackedVector2Array([
+		helmet_center + Vector2(-15.0, -5.0), helmet_center + Vector2(-13.0, -14.0), helmet_center + Vector2(-7.0, -21.0),
+		helmet_center + Vector2(0.0, -23.0), helmet_center + Vector2(7.0, -21.0), helmet_center + Vector2(13.0, -14.0),
+		helmet_center + Vector2(15.0, -5.0)
+	]), black, 2.2, true)
+	# Open-face side guards and a broad brow distinguish this helmet from the prior Spartan design.
+	draw_colored_polygon(PackedVector2Array([
+		helmet_center + Vector2(-14.0, -4.0), helmet_center + Vector2(-7.0, -1.0),
+		helmet_center + Vector2(-8.0, 10.0), helmet_center + Vector2(-15.0, 7.0)
+	]), black)
+	draw_colored_polygon(PackedVector2Array([
+		helmet_center + Vector2(7.0, -1.0), helmet_center + Vector2(14.0, -4.0),
+		helmet_center + Vector2(15.0, 7.0), helmet_center + Vector2(8.0, 10.0)
+	]), black)
+	draw_line(helmet_center + Vector2(-12.0, -3.0), helmet_center + Vector2(12.0, -3.0), black, 3.0, true)
+	draw_line(helmet_center + Vector2(-8.0, 11.0), helmet_center + Vector2(8.0, 11.0), black, 2.5, true)
 
 func _draw_hidden_building_landmark(center: Vector2, building: int, level: int, unit_class: int) -> void:
 	var landmark_origin := center + Config.VISIBLE_LANDMARK_OFFSET
@@ -968,13 +1029,13 @@ func _draw_ground_item_icon(center: Vector2, item_id: String) -> void:
 		_:
 			draw_circle(center, 12.0, color)
 
-func _draw_pickaxe_icon(center: Vector2) -> void:
+func _draw_pickaxe_icon(center: Vector2, scale := 1.0) -> void:
 	var handle_color := Color("#d6a85c")
 	var head_color := Color("#e2e8f0")
-	draw_line(center + Vector2(-8, 9), center + Vector2(6, -7), handle_color, 3.0, true)
-	draw_line(center + Vector2(3, -10), center + Vector2(14, -5), head_color, 4.0, true)
-	draw_line(center + Vector2(3, -10), center + Vector2(7, -1), head_color, 4.0, true)
-	draw_circle(center + Vector2(-8, 9), 2.0, Color("#a16207"))
+	draw_line(center + Vector2(-8, 9) * scale, center + Vector2(6, -7) * scale, handle_color, 3.0 * scale, true)
+	draw_line(center + Vector2(3, -10) * scale, center + Vector2(14, -5) * scale, head_color, 4.0 * scale, true)
+	draw_line(center + Vector2(3, -10) * scale, center + Vector2(7, -1) * scale, head_color, 4.0 * scale, true)
+	draw_circle(center + Vector2(-8, 9) * scale, 2.0 * scale, Color("#a16207"))
 
 func _is_in_barracks_range(cell: Vector2i) -> bool:
 	if not tiles.has(barracks_range_cell) or cell == barracks_range_cell:
