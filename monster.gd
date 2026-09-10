@@ -10,13 +10,20 @@ var attack_cooldown := 0.0
 var main_ref: Node
 var drop_owner := 0
 var defeated := false
+var monster_level := Config.WILD_MONSTER_LEVEL_ONE
+var attack := Config.WILD_MONSTER_ATTACK
+var visual_scale := 1.0
 
-func setup(start_cell: Vector2i, controller: Node, owner: int = 0) -> void:
+func setup(start_cell: Vector2i, controller: Node, owner: int = 0, level: int = Config.WILD_MONSTER_LEVEL_ONE) -> void:
 	cell = start_cell
 	main_ref = controller
 	drop_owner = owner
 	defeated = false
-	max_hp = Config.WILD_MONSTER_MAX_HP
+	monster_level = clampi(level, Config.WILD_MONSTER_LEVEL_ONE, Config.WILD_MONSTER_LEVEL_THREE)
+	var level_index := monster_level - 1
+	max_hp = Config.WILD_MONSTER_MAX_HP * float(Config.WILD_MONSTER_LEVEL_HP_MULTIPLIERS[level_index])
+	attack = Config.WILD_MONSTER_ATTACK * float(Config.WILD_MONSTER_LEVEL_ATTACK_MULTIPLIERS[level_index])
+	visual_scale = float(Config.WILD_MONSTER_LEVEL_VISUAL_SCALES[level_index])
 	hp = max_hp
 	position = main_ref.board.axial_to_world(cell)
 	queue_redraw()
@@ -26,7 +33,6 @@ func _process(delta: float) -> void:
 		return
 	attack_cooldown = maxf(0.0, attack_cooldown - delta)
 	main_ref.process_monster(self, delta)
-	queue_redraw()
 
 func can_attack() -> bool:
 	return attack_cooldown <= 0.0
@@ -45,6 +51,7 @@ func take_damage(amount: float, attacker: Node = null) -> void:
 		queue_redraw()
 
 func _draw() -> void:
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2(visual_scale, visual_scale))
 	# Procedural monster model: shadow, body, head, horns, claws and feet.
 	# Keeping it in _draw makes the model replaceable by a Sprite2D later.
 	var outline := Color("#111827")
@@ -98,6 +105,9 @@ func _draw() -> void:
 	# while it is still at full health. The monster is removed on death.
 	draw_rect(Rect2(-22, -51, 44, 4), Color("#0f172a"), true)
 	draw_rect(Rect2(-22, -51, 44.0 * clampf(hp / max_hp, 0.0, 1.0), 4), Color("#f472b6"), true)
+	draw_circle(Vector2(18.0, -40.0), 8.0, Color("#172033"))
+	draw_string(ThemeDB.fallback_font, Vector2(14.0, -36.0), str(monster_level), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("#f8fafc"))
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 func _draw_shadow_ellipse(center: Vector2, radii: Vector2, color: Color) -> void:
 	var points := PackedVector2Array()

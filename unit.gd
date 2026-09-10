@@ -18,10 +18,15 @@ var main_ref: Node
 var moving := false
 var barracks_level := 1
 var unit_class := Config.UNIT_CLASS_WARRIOR
+var profession_race := Config.UNIT_RACE_HORDE
 var is_ranged := false
 var returning_home := false
 var garrisoned := false
+var dispatched := false
 var monster_target: Node = null
+var combat_target: Dictionary = {}
+var combat_target_refresh_timer := 0.0
+var monster_interrupt_timer := 0.0
 var frozen_until := 0.0
 
 func setup(owner: int, start_cell: Vector2i, controller: Node, source_level: int = 1, source_class: int = Config.UNIT_CLASS_WARRIOR) -> void:
@@ -32,19 +37,56 @@ func setup(owner: int, start_cell: Vector2i, controller: Node, source_level: int
 	main_ref = controller
 	barracks_level = clampi(source_level, 1, 4)
 	unit_class = clampi(source_class, 0, Config.UNIT_CLASS_COUNT - 1)
+	profession_race = Config.get_unit_class_race(unit_class)
 	max_hp = float(Config.UNIT_CLASS_BASE_HP[unit_class]) * float(barracks_level)
 	hp = max_hp
-	attack = float(Config.UNIT_CLASS_BASE_ATTACK[unit_class]) * float(barracks_level)
+	# Each barracks upgrade doubles attack power while keeping level 1 unchanged.
+	attack = float(Config.UNIT_CLASS_BASE_ATTACK[unit_class]) * pow(2.0, float(barracks_level - 1))
 	move_speed = (Config.UNIT_BASE_MOVE_SPEED + Config.UNIT_LEVEL_MOVE_INCREMENT * float(barracks_level - 1)) * Config.UNIT_SPEED_SCALE
+	refresh_equipment_stats()
 	attack_range = float(Config.UNIT_CLASS_ATTACK_RANGE[unit_class])
 	attack_interval = float(Config.UNIT_CLASS_ATTACK_INTERVAL[unit_class])
 	is_ranged = bool(Config.UNIT_CLASS_IS_RANGED[unit_class])
 	returning_home = false
 	garrisoned = false
+	dispatched = false
 	monster_target = null
+	combat_target.clear()
+	combat_target_refresh_timer = 0.0
+	monster_interrupt_timer = 0.0
 	frozen_until = 0.0
 	position = main_ref.board.axial_to_world(cell)
 	queue_redraw()
+
+func get_profession_race() -> int:
+	return profession_race
+
+func get_profession_race_name() -> String:
+	return Config.get_unit_class_race_name(unit_class)
+
+func apply_barracks_level(source_level: int) -> void:
+	var health_ratio := hp / max_hp if max_hp > 0.0 else 1.0
+	barracks_level = clampi(source_level, 1, 4)
+	max_hp = float(Config.UNIT_CLASS_BASE_HP[unit_class]) * float(barracks_level)
+	hp = clampf(max_hp * health_ratio, 0.0, max_hp)
+	attack = float(Config.UNIT_CLASS_BASE_ATTACK[unit_class]) * pow(2.0, float(barracks_level - 1))
+	move_speed = (Config.UNIT_BASE_MOVE_SPEED + Config.UNIT_LEVEL_MOVE_INCREMENT * float(barracks_level - 1)) * Config.UNIT_SPEED_SCALE
+	refresh_equipment_stats()
+	queue_redraw()
+
+func refresh_equipment_stats() -> void:
+	var health_ratio := hp / max_hp if max_hp > 0.0 else 1.0
+	var equipment_health := 0.0
+	var equipment_attack := 0.0
+	var equipment_speed := 0.0
+	if main_ref != null and main_ref.has_method("_get_faction_equipment_bonus"):
+		equipment_health = float(main_ref.call("_get_faction_equipment_bonus", faction, "health"))
+		equipment_attack = float(main_ref.call("_get_faction_equipment_bonus", faction, "attack"))
+		equipment_speed = float(main_ref.call("_get_faction_equipment_bonus", faction, "move_speed"))
+	max_hp = float(Config.UNIT_CLASS_BASE_HP[unit_class]) * float(barracks_level) * (1.0 + equipment_health)
+	hp = clampf(max_hp * health_ratio, 0.0, max_hp)
+	attack = float(Config.UNIT_CLASS_BASE_ATTACK[unit_class]) * pow(2.0, float(barracks_level - 1)) * (1.0 + equipment_attack)
+	move_speed = (Config.UNIT_BASE_MOVE_SPEED + Config.UNIT_LEVEL_MOVE_INCREMENT * float(barracks_level - 1)) * Config.UNIT_SPEED_SCALE * (1.0 + equipment_speed)
 
 func set_monster_target(monster: Node) -> void:
 	if is_instance_valid(monster):
@@ -52,6 +94,10 @@ func set_monster_target(monster: Node) -> void:
 
 func clear_monster_target() -> void:
 	monster_target = null
+
+func invalidate_combat_target() -> void:
+	combat_target.clear()
+	combat_target_refresh_timer = 0.0
 
 func is_targeting_monster(monster: Node) -> bool:
 	return is_instance_valid(monster_target) and monster_target == monster
@@ -80,6 +126,7 @@ func cancel_return_home() -> void:
 	queue_redraw()
 
 func begin_garrison() -> void:
+	dispatched = false
 	returning_home = false
 	garrisoned = true
 	moving = true
@@ -87,6 +134,17 @@ func begin_garrison() -> void:
 	queue_redraw()
 
 func leave_garrison() -> void:
+	dispatched = true
+	garrisoned = false
+	moving = false
+	queue_redraw()
+
+func dispatch_from_barracks() -> void:
+	# Once a soldier leaves the barracks, it becomes a persistent field unit.
+	# New targets are still discovered only inside its barracks dispatch area;
+	# the unit is never recalled automatically.
+	dispatched = true
+	returning_home = false
 	garrisoned = false
 	moving = false
 	queue_redraw()
@@ -107,19 +165,22 @@ func _process(delta: float) -> void:
 	main_ref.process_unit(self, delta)
 
 func move_directly_to(target_position: Vector2, delta: float) -> void:
-	destination = main_ref.board.world_to_axial(target_position)
 	moving = true
 	position = position.move_toward(target_position, move_speed * delta)
 	var entered_cell: Vector2i = main_ref.board.world_to_axial(position)
 	if main_ref.board.has_cell(entered_cell) and entered_cell != cell:
+		var old_cell := cell
 		cell = entered_cell
+		main_ref.on_unit_cell_changed(self, old_cell, cell)
 		if not returning_home and not garrisoned:
 			main_ref.unit_arrived(self)
 	if position.distance_to(target_position) < 1.0:
 		position = target_position
 		var final_cell: Vector2i = main_ref.board.world_to_axial(position)
 		if main_ref.board.has_cell(final_cell) and final_cell != cell:
+			var old_cell := cell
 			cell = final_cell
+			main_ref.on_unit_cell_changed(self, old_cell, cell)
 			if not returning_home and not garrisoned:
 				main_ref.unit_arrived(self)
 		moving = false
@@ -141,7 +202,7 @@ func take_damage(amount: float, _attacker: Node = null) -> void:
 func _draw() -> void:
 	var visual_scale: float = float(Config.UNIT_LEVEL_VISUAL_SCALE[clampi(barracks_level, 1, 4) - 1])
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2(visual_scale, visual_scale))
-	var body := Color("#38bdf8") if faction == 1 else Color("#ef4444")
+	var body: Color = main_ref.get_faction_color(faction) if main_ref != null and main_ref.has_method("get_faction_color") else (Color("#38bdf8") if faction == 1 else Color("#ef4444"))
 	# A small humanoid silhouette reads more clearly as a soldier than a dot,
 	# while keeping the same compact footprint on the hex tile.
 	var outline := Color("#0f172a")

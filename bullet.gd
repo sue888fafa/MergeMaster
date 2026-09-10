@@ -1,3 +1,4 @@
+class_name BattleBullet
 extends Node2D
 
 var target: Node2D
@@ -9,6 +10,8 @@ var damage := 0.0
 var speed := 360.0
 var previous_position := Vector2.ZERO
 var source_unit: Node = null
+var source_faction := 0
+var projectile_color := Color("#fef08a")
 
 func setup(start_position: Vector2, next_target: Node2D, amount: float, controller: Node, attacker: Node = null) -> void:
 	position = start_position
@@ -20,6 +23,7 @@ func setup(start_position: Vector2, next_target: Node2D, amount: float, controll
 	damage = amount
 	main_ref = controller
 	source_unit = attacker
+	_update_projectile_color()
 	queue_redraw()
 
 func setup_building(start_position: Vector2, next_cell: Vector2i, amount: float, owner: int, controller: Node, attacker: Node = null) -> void:
@@ -32,26 +36,36 @@ func setup_building(start_position: Vector2, next_cell: Vector2i, amount: float,
 	damage = amount
 	main_ref = controller
 	source_unit = attacker
+	_update_projectile_color()
 	queue_redraw()
+
+func _update_projectile_color() -> void:
+	source_faction = 0
+	projectile_color = Color("#fef08a")
+	if not is_instance_valid(source_unit):
+		return
+	source_faction = int(source_unit.get("faction"))
+	if main_ref != null and main_ref.has_method("get_faction_color"):
+		projectile_color = main_ref.get_faction_color(source_faction)
 
 func _process(delta: float) -> void:
 	if main_ref == null or main_ref.game_over:
-		queue_free()
+		_release()
 		return
 	previous_position = position
 	var target_position: Vector2
 	if target_is_building:
 		if not main_ref.board.has_cell(target_cell):
-			queue_free()
+			_release()
 			return
 		var tile: Dictionary = main_ref.board.tiles[target_cell]
 		if int(tile["owner"]) != target_faction or int(tile["building"]) == main_ref.EMPTY:
-			queue_free()
+			_release()
 			return
 		target_position = main_ref.board.axial_to_world(target_cell)
 	else:
 		if not is_instance_valid(target) or not target.has_method("take_damage"):
-			queue_free()
+			_release()
 			return
 		target_position = target.position
 	position = position.move_toward(target_position, speed * delta)
@@ -68,10 +82,18 @@ func _process(delta: float) -> void:
 				target.take_damage(damage, source_unit)
 			else:
 				target.take_damage(damage)
-		queue_free()
+		_release()
 	queue_redraw()
 
+func _release() -> void:
+	if main_ref != null and main_ref.has_method("release_bullet"):
+		main_ref.release_bullet(self)
+	else:
+		queue_free()
+
 func _draw() -> void:
-	draw_line(to_local(previous_position), Vector2.ZERO, Color(1.0, 0.85, 0.3, 0.75), 3.0, true)
-	draw_circle(Vector2.ZERO, 5.0, Color("#fef08a"))
+	var trail_color := Color(projectile_color, 0.78)
+	var core_color := projectile_color.lightened(0.25)
+	draw_line(to_local(previous_position), Vector2.ZERO, trail_color, 3.0, true)
+	draw_circle(Vector2.ZERO, 5.0, core_color)
 	draw_circle(Vector2.ZERO, 2.0, Color("#ffffff"))

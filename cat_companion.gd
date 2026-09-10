@@ -12,6 +12,7 @@ const HEAD_RADIUS := 38.0
 const SLOT_SIZE := 62.0
 const SLOT_GAP := 8.0
 const SLOT_TOP := 218.0
+const ITEM_HINT_DURATION := 1.8
 
 var bubble_message := ""
 var bubble_remaining := 0.0
@@ -32,6 +33,11 @@ var flying_item_index := -1
 var flying_start_local := Vector2.ZERO
 var flying_progress := 0.0
 var fly_tween: Tween
+var last_layout_progress := -1.0
+var item_hint_index := -1
+var item_hint_text := ""
+var item_hint_progress := 0.0
+var item_hint_tween: Tween
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -53,6 +59,30 @@ func show_bubble(message: String) -> void:
 func hide_bubble() -> void:
 	bubble_message = ""
 	bubble_remaining = 0.0
+	queue_redraw()
+
+func _hide_item_hint() -> void:
+	if item_hint_tween != null and item_hint_tween.is_valid():
+		item_hint_tween.kill()
+	item_hint_index = -1
+	item_hint_text = ""
+	item_hint_progress = 0.0
+
+func _show_item_hint(index: int) -> void:
+	if index < 0 or index >= inventory_items.size():
+		return
+	var item_id := inventory_items[index]
+	var item: Dictionary = MerchantDataScript.get_item(item_id)
+	if item.is_empty():
+		return
+	_hide_item_hint()
+	item_hint_index = index
+	item_hint_text = "%s\n%s" % [str(item.get("name", "卡片")), str(item.get("description", ""))]
+	item_hint_progress = 0.0
+	item_hint_tween = create_tween()
+	item_hint_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	item_hint_tween.tween_property(self, "item_hint_progress", 1.0, ITEM_HINT_DURATION)
+	item_hint_tween.finished.connect(_hide_item_hint)
 	queue_redraw()
 
 func toggle_expanded() -> void:
@@ -167,6 +197,7 @@ func _slot_button_style(color: Color) -> StyleBoxFlat:
 	return style
 
 func _on_slot_pressed(_index: int, slot_button: Button) -> void:
+	_show_item_hint(_index)
 	var highlight_color := Color(1.22, 1.14, 0.82, slot_button.modulate.a)
 	var normal_color := Color(1.0, 1.0, 1.0, slot_button.modulate.a)
 	slot_button.modulate = highlight_color
@@ -205,7 +236,8 @@ func _process(delta: float) -> void:
 			drag_started = false
 			if not dropped_item.is_empty() and was_dragged:
 				inventory_item_dropped.emit(dropped_item, dropped_position)
-	_update_interaction_layout()
+	if not is_equal_approx(last_layout_progress, expanded_progress):
+		_update_interaction_layout()
 	queue_redraw()
 
 func _head_center() -> Vector2:
@@ -251,6 +283,7 @@ func _update_interaction_layout() -> void:
 		var slot_modulate := slot_button.modulate
 		slot_modulate.a = clampf(expanded_progress, 0.0, 1.0)
 		slot_button.modulate = slot_modulate
+	last_layout_progress = expanded_progress
 
 func _draw() -> void:
 	var bob := sin(animation_time * 2.8) * 1.8
@@ -355,6 +388,45 @@ func _draw_item_slots(reveal: float) -> void:
 		var target := Vector2(fly_left + flying_item_index * (fly_slot_size + fly_gap) + fly_slot_size * 0.5, fly_top + fly_slot_size * 0.5)
 		var fly_position := flying_start_local.lerp(target, flying_progress)
 		_draw_item_icon(fly_position, flying_item_id, 0.90 * (1.0 - flying_progress * 0.22))
+	if item_hint_index >= 0 and item_hint_index < inventory_items.size() and item_hint_progress < 1.0:
+		_draw_item_hint(item_hint_index, item_hint_text, item_hint_progress)
+
+func _draw_item_hint(index: int, text: String, progress: float) -> void:
+	var rect := _get_animated_slot_rect(index, 1.0)
+	var hint_width := minf(220.0, maxf(150.0, size.x - 16.0))
+	var hint_height := 58.0
+	var rise := progress * 30.0
+	var hint_x := clampf(rect.get_center().x - hint_width * 0.5, 8.0, maxf(8.0, size.x - hint_width - 8.0))
+	var hint_y := rect.position.y - hint_height - 12.0 - rise
+	var fade := 1.0
+	if progress > 0.62:
+		fade = 1.0 - (progress - 0.62) / 0.38
+	var hint_rect := Rect2(Vector2(hint_x, hint_y), Vector2(hint_width, hint_height))
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.02, 0.05, 0.10, 0.94 * fade)
+	style.border_color = Color(0.98, 0.77, 0.25, 0.92 * fade)
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(8)
+	draw_style_box(style, hint_rect)
+	var arrow_x := clampf(rect.get_center().x, hint_rect.position.x + 18.0, hint_rect.end.x - 18.0)
+	draw_colored_polygon(PackedVector2Array([
+		Vector2(arrow_x - 6.0, hint_rect.end.y),
+		Vector2(arrow_x + 6.0, hint_rect.end.y),
+		Vector2(arrow_x, hint_rect.end.y + 7.0)
+	]), Color(0.02, 0.05, 0.10, 0.94 * fade))
+	var font := ThemeDB.fallback_font
+	var text_position := hint_rect.position + Vector2(8.0, 5.0)
+	draw_multiline_string(font, text_position + Vector2(0.0, 11.0), _wrap_item_hint(text), HORIZONTAL_ALIGNMENT_CENTER, hint_width - 16.0, 12, 4, Color(0.96, 0.98, 1.0, fade))
+
+func _wrap_item_hint(text: String) -> String:
+	var lines: Array[String] = []
+	for raw_line in text.split("\n"):
+		var line := str(raw_line)
+		while line.length() > 14:
+			lines.append(line.substr(0, 14))
+			line = line.substr(14)
+		lines.append(line)
+	return "\n".join(lines)
 
 func _draw_item_icon(center: Vector2, item_id: String, scale: float) -> void:
 	draw_set_transform(center, 0.0, Vector2(scale, scale))

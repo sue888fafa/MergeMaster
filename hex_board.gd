@@ -9,10 +9,12 @@ signal tile_drag_started(cell: Vector2i)
 signal tile_reveal_midpoint(cell: Vector2i)
 signal tile_reveal_finished(cell: Vector2i)
 signal intelligence_building_drop_finished(cell: Vector2i)
+signal building_changed(cell: Vector2i, building: int)
 
 const UNKNOWN := 0
-const PLAYER := 1
-const AI := 2
+const PLAYER := Config.FACTION_PLAYER
+const AI := Config.FACTION_RED
+const FACTIONS: Array[int] = Config.FACTION_IDS
 const EMPTY := 0
 const MINE := 1
 const BARRACKS := 2
@@ -28,6 +30,12 @@ const CAMERA_PAN_THRESHOLD := 8.0
 const DIRECTIONS := [Vector2i(1, 0), Vector2i(1, -1), Vector2i(0, -1), Vector2i(-1, 0), Vector2i(-1, 1), Vector2i(0, 1)]
 const PLAYER_HQ := Config.PLAYER_HQ
 const AI_HQ := Config.AI_HQ
+const HQ_CELLS: Array[Vector2i] = [
+	Config.PLAYER_HQ,
+	Config.AI_HQ,
+	Config.PURPLE_HQ,
+	Config.GREEN_HQ
+]
 
 var radius := Config.BOARD_RADIUS
 var tile_size := 50.0
@@ -40,6 +48,11 @@ var buildable_cells: Array[Vector2i] = []
 var mergeable_cells: Array[Vector2i] = []
 var merge_effect_cells: Array[Vector2i] = []
 var purchasable_cells: Array[Vector2i] = []
+var buildable_cell_set: Dictionary = {}
+var mergeable_cell_set: Dictionary = {}
+var merge_effect_cell_set: Dictionary = {}
+var purchasable_cell_set: Dictionary = {}
+var building_cells: Dictionary = {}
 var player_gold := 0.0
 var drag_start_cell := Vector2i(999, 999)
 var drag_active := false
@@ -60,6 +73,12 @@ var merge_effect_refresh_timer := 0.0
 var card_land_loss_cell := Vector2i(999, 999)
 var card_land_loss_elapsed := 0.0
 var camera_focus_tween: Tween
+var cells_within_detection_range: Dictionary = {}
+var building_visual_dirty := true
+var has_animated_building_progress := false
+var animated_building_progress_cells: Dictionary = {}
+var last_draw_canvas_transform := Transform2D.IDENTITY
+var last_draw_viewport_size := Vector2(-1.0, -1.0)
 @onready var camera: Camera2D = get_parent().get_node_or_null("Camera2D")
 
 func _ready() -> void:
@@ -70,6 +89,10 @@ func _ready() -> void:
 func _build_map() -> void:
 	tiles.clear()
 	draw_cells.clear()
+	animated_building_progress_cells.clear()
+	building_cells.clear()
+	has_animated_building_progress = false
+	building_visual_dirty = true
 	for q in range(-radius, radius + 1):
 		for r in range(-radius, radius + 1):
 			if abs(q + r) <= radius:
@@ -103,18 +126,41 @@ func _build_map() -> void:
 	_assign_tile_types()
 
 	# Only the HQs are owned at the start; their six neighbors are the initial purchase frontier.
-	set_tile_owner(PLAYER_HQ, PLAYER, true)
-	set_tile_owner(AI_HQ, AI, true)
+	for owner in FACTIONS:
+		set_tile_owner(_hq_cell_for_owner(owner), owner, true)
 	draw_cells.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
 		return axial_to_world(a).y < axial_to_world(b).y
 	)
 	_recalculate_map_bounds()
+	_build_detection_range_cache()
+
+func _hq_cell_for_owner(owner: int) -> Vector2i:
+	return Config.FACTION_HQ_CELLS.get(owner, Vector2i(999, 999))
+
+func _build_detection_range_cache() -> void:
+	cells_within_detection_range.clear()
+	var detection_range := int(Config.BARRACKS_DETECTION_RANGE)
+	for cell in tiles:
+		var nearby: Array[Vector2i] = []
+		# Enumerate the local hexagon in the same q/r order as the board
+		# dictionary, avoiding a full-board comparison for every cell.
+		for delta_q in range(-detection_range, detection_range + 1):
+			for delta_r in range(-detection_range, detection_range + 1):
+				if abs(delta_q) + abs(delta_r) + abs(delta_q + delta_r) > detection_range * 2:
+					continue
+				var other_cell: Vector2i = cell + Vector2i(delta_q, delta_r)
+				if tiles.has(other_cell):
+					nearby.append(other_cell)
+		cells_within_detection_range[cell] = nearby
+
+func get_cells_within_detection_range(cell: Vector2i) -> Array[Vector2i]:
+	return cells_within_detection_range.get(cell, [cell])
 
 func _assign_tile_types() -> void:
 	var candidates: Array[Vector2i] = []
 	for cell in tiles:
 		var typed_cell: Vector2i = cell
-		if typed_cell != PLAYER_HQ and typed_cell != AI_HQ:
+		if not HQ_CELLS.has(typed_cell):
 			candidates.append(typed_cell)
 	if candidates.is_empty():
 		return
@@ -122,7 +168,7 @@ func _assign_tile_types() -> void:
 	var question_count: int = clampi(roundi(float(candidates.size()) * Config.QUESTION_TILE_TYPE_WEIGHT), 2, candidates.size())
 	var visible_count: int = clampi(roundi(float(candidates.size()) * Config.VISIBLE_TILE_TYPE_WEIGHT), 0, candidates.size() - question_count)
 	var forced_questions: Array[Vector2i] = []
-	for hq in [PLAYER_HQ, AI_HQ]:
+	for hq in HQ_CELLS:
 		var nearby: Array[Vector2i] = neighbors(hq)
 		nearby.shuffle()
 		for cell in nearby:
@@ -165,12 +211,17 @@ func reset() -> void:
 	mergeable_cells.clear()
 	merge_effect_cells.clear()
 	purchasable_cells.clear()
+	buildable_cell_set.clear()
+	mergeable_cell_set.clear()
+	merge_effect_cell_set.clear()
+	purchasable_cell_set.clear()
 	bombardment_cells.clear()
 	bombardment_warning_cells.clear()
 	bombardment_warning_elapsed = 0.0
 	mergeable_effect_elapsed = 0.0
 	merge_effect_refresh_timer = 0.0
 	clear_card_land_loss_cell()
+	has_animated_building_progress = false
 	drag_start_cell = Vector2i(999, 999)
 	drag_active = false
 	camera_drag_active = false
@@ -264,6 +315,7 @@ func set_tile_owner(cell: Vector2i, owner: int, revealed := true) -> void:
 		return
 	tiles[cell]["owner"] = owner
 	tiles[cell]["revealed"] = revealed
+	building_visual_dirty = true
 
 func set_building(cell: Vector2i, building: int, level: int = 1, unit_class: int = -1, revealed: bool = true) -> void:
 	if tiles.has(cell):
@@ -273,14 +325,24 @@ func set_building(cell: Vector2i, building: int, level: int = 1, unit_class: int
 		tiles[cell]["building_level"] = clampi(level, 1, 4) if building == BARRACKS else 0
 		if building == BARRACKS:
 			tiles[cell]["unit_class"] = clampi(unit_class, 0, Config.UNIT_CLASS_COUNT - 1)
-			tiles[cell]["building_max_hp"] = Config.BARRACKS_BASE_HP * float(int(tiles[cell]["building_level"]))
+			var owner := int(tiles[cell].get("owner", UNKNOWN))
+			var base_max := Config.BARRACKS_BASE_HP * float(int(tiles[cell]["building_level"]))
+			if get_parent() != null and get_parent().has_method("get_building_max_hp"):
+				base_max = float(get_parent().call("get_building_max_hp", owner, BARRACKS)) * float(int(tiles[cell]["building_level"]))
+			tiles[cell]["building_max_hp"] = base_max
 			tiles[cell]["building_hp"] = tiles[cell]["building_max_hp"]
 		elif building == MINE or building == TOWER:
+			var owner := int(tiles[cell].get("owner", UNKNOWN))
 			tiles[cell]["building_max_hp"] = Config.MINE_MAX_HP if building == MINE else Config.TOWER_MAX_HP
+			if get_parent() != null and get_parent().has_method("get_building_max_hp"):
+				tiles[cell]["building_max_hp"] = float(get_parent().call("get_building_max_hp", owner, building))
 			tiles[cell]["building_hp"] = tiles[cell]["building_max_hp"]
 		elif building == STEEL_BARRIER:
 			tiles[cell]["unit_class"] = -1
 			tiles[cell]["building_max_hp"] = Config.STEEL_BARRIER_MAX_HP
+			var owner := int(tiles[cell].get("owner", UNKNOWN))
+			if get_parent() != null and get_parent().has_method("get_building_max_hp"):
+				tiles[cell]["building_max_hp"] = float(get_parent().call("get_building_max_hp", owner, building))
 			tiles[cell]["building_hp"] = tiles[cell]["building_max_hp"]
 		else:
 			tiles[cell]["unit_class"] = -1
@@ -293,6 +355,13 @@ func set_building(cell: Vector2i, building: int, level: int = 1, unit_class: int
 		if building != MERCHANT:
 			tiles[cell]["merchant_active"] = false
 			tiles[cell]["merchant_stock"] = []
+		if building == EMPTY:
+			building_cells.erase(cell)
+		else:
+			building_cells[cell] = true
+		_update_building_progress_state(cell)
+		building_visual_dirty = true
+		building_changed.emit(cell, building)
 
 func destroy_building(cell: Vector2i) -> bool:
 	if not tiles.has(cell):
@@ -311,18 +380,26 @@ func is_rebuildable(cell: Vector2i) -> bool:
 
 func set_buildable_cells(cells: Array[Vector2i]) -> void:
 	buildable_cells = cells.duplicate()
+	buildable_cell_set.clear()
+	for cell in buildable_cells:
+		buildable_cell_set[cell] = true
 	queue_redraw()
 
 func clear_buildable_cells() -> void:
 	buildable_cells.clear()
+	buildable_cell_set.clear()
 	queue_redraw()
 
 func set_mergeable_cells(cells: Array[Vector2i]) -> void:
 	mergeable_cells = cells.duplicate()
+	mergeable_cell_set.clear()
+	for cell in mergeable_cells:
+		mergeable_cell_set[cell] = true
 	queue_redraw()
 
 func clear_mergeable_cells() -> void:
 	mergeable_cells.clear()
+	mergeable_cell_set.clear()
 	queue_redraw()
 
 func _refresh_merge_effect_cells() -> void:
@@ -352,6 +429,9 @@ func _refresh_merge_effect_cells() -> void:
 			eligible_cells.append(raw_cell)
 	if eligible_cells != merge_effect_cells:
 		merge_effect_cells = eligible_cells
+		merge_effect_cell_set.clear()
+		for cell in merge_effect_cells:
+			merge_effect_cell_set[cell] = true
 		queue_redraw()
 
 func set_barracks_range_cell(cell: Vector2i) -> void:
@@ -364,9 +444,14 @@ func clear_barracks_range_cell() -> void:
 
 func set_purchasable_cells(cells: Array[Vector2i]) -> void:
 	purchasable_cells = cells.duplicate()
+	purchasable_cell_set.clear()
+	for cell in purchasable_cells:
+		purchasable_cell_set[cell] = true
 	queue_redraw()
 
 func set_player_gold(value: float) -> void:
+	if is_equal_approx(player_gold, value):
+		return
 	player_gold = value
 	queue_redraw()
 
@@ -429,10 +514,32 @@ func get_building_max_hp(cell: Vector2i) -> float:
 func set_building_hp(cell: Vector2i, value: float) -> void:
 	if tiles.has(cell):
 		tiles[cell]["building_hp"] = clampf(value, 0.0, get_building_max_hp(cell))
+		building_visual_dirty = true
 
-func update_build_timer(cell: Vector2i, value: float) -> void:
+func update_build_timer(cell: Vector2i, value: float, visual_dirty := true) -> void:
 	if tiles.has(cell):
 		tiles[cell]["build_timer"] = value
+		_update_building_progress_state(cell)
+		if visual_dirty:
+			building_visual_dirty = true
+
+func _update_building_progress_state(cell: Vector2i) -> void:
+	if not tiles.has(cell):
+		return
+	var tile: Dictionary = tiles[cell]
+	var timer := float(tile.get("build_timer", 0.0))
+	var building := int(tile.get("building", EMPTY))
+	var production_interval := Config.BARRACKS_PRODUCTION_INTERVAL
+	if building == BARRACKS and get_parent() != null and get_parent().has_method("get_barracks_production_interval"):
+		production_interval = float(get_parent().call("get_barracks_production_interval", int(tile.get("owner", UNKNOWN))))
+	if building == BARRACKS and timer > 0.0 and timer < production_interval:
+		animated_building_progress_cells[cell] = true
+	else:
+		animated_building_progress_cells.erase(cell)
+	has_animated_building_progress = not animated_building_progress_cells.is_empty()
+
+func mark_building_visual_dirty() -> void:
+	building_visual_dirty = true
 
 func get_build_timer(cell: Vector2i) -> float:
 	return float(tiles.get(cell, {}).get("build_timer", 0.0))
@@ -532,6 +639,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			camera_drag_active = false
 
 func _process(delta: float) -> void:
+	var current_canvas_transform := get_viewport().get_canvas_transform()
+	var current_viewport_size := get_viewport().get_visible_rect().size
+	if current_canvas_transform != last_draw_canvas_transform or current_viewport_size != last_draw_viewport_size:
+		last_draw_canvas_transform = current_canvas_transform
+		last_draw_viewport_size = current_viewport_size
+		queue_redraw()
 	_process_reveal_animations(delta)
 	_process_barracks_merge_animations(delta)
 	_process_intelligence_building_drop_animations(delta)
@@ -541,7 +654,6 @@ func _process(delta: float) -> void:
 		merge_effect_refresh_timer = 0.2
 	if not merge_effect_cells.is_empty():
 		mergeable_effect_elapsed += delta
-		queue_redraw()
 	if not bombardment_warning_cells.is_empty():
 		bombardment_warning_elapsed += delta
 		queue_redraw()
@@ -680,10 +792,14 @@ func _clamp_camera_position() -> void:
 	max_world += Vector2(tile_size + Config.CAMERA_MAP_PADDING, tile_size + Config.CAMERA_MAP_PADDING)
 	var viewport_size := get_viewport_rect().size
 	var half_view := viewport_size / (2.0 * camera.zoom.x)
-	var player_hq_position := axial_to_world(Config.PLAYER_HQ).x
-	var ai_hq_position := axial_to_world(Config.AI_HQ).x
-	var camera_min_x := minf(min_world.x + half_view.x, player_hq_position)
-	var camera_max_x := maxf(max_world.x - half_view.x, ai_hq_position)
+	var min_hq_x := INF
+	var max_hq_x := -INF
+	for hq in HQ_CELLS:
+		var hq_x := axial_to_world(hq).x
+		min_hq_x = minf(min_hq_x, hq_x)
+		max_hq_x = maxf(max_hq_x, hq_x)
+	var camera_min_x := minf(min_world.x + half_view.x, min_hq_x)
+	var camera_max_x := maxf(max_world.x - half_view.x, max_hq_x)
 	camera.position.x = _clamp_camera_axis(camera.position.x, camera_min_x, camera_max_x)
 	camera.position.y = _clamp_camera_axis(camera.position.y, min_world.y + half_view.y, max_world.y - half_view.y)
 
@@ -707,13 +823,23 @@ func _notification(what: int) -> void:
 		_clamp_camera_position()
 
 func _draw() -> void:
+	var visible_world_rect := _get_visible_world_rect().grow(tile_size * 2.0 + Config.TILE_EXTRUSION_DEPTH + Config.TILE_SHADOW_OFFSET_Y)
 	# Draw rear rows first so the extruded lower edge sits behind the next row.
 	for cell in draw_cells:
+		if not visible_world_rect.has_point(axial_to_world(cell)):
+			continue
 		_draw_tile(cell)
 	# The dragged barracks must be drawn after every tile. Drawing it from
 	# _draw_tile() lets a later tile row cover the preview while it is moving.
 	if long_press_active and tiles.has(drag_start_cell):
 		_draw_drag_source_preview(drag_start_cell)
+
+func _get_visible_world_rect() -> Rect2:
+	var viewport_rect := get_viewport().get_visible_rect()
+	var inverse_canvas := get_viewport().get_canvas_transform().affine_inverse()
+	var top_left := inverse_canvas * viewport_rect.position
+	var bottom_right := inverse_canvas * (viewport_rect.position + viewport_rect.size)
+	return Rect2(top_left, bottom_right - top_left)
 
 func _draw_tile(cell: Vector2i) -> void:
 	var tile: Dictionary = tiles[cell]
@@ -737,18 +863,16 @@ func _draw_tile(cell: Vector2i) -> void:
 		# their landmark alone communicates the revealed tile type.
 		fill = Color("#111827")
 		outline = Color("#475569")
-	elif owner == PLAYER:
-		fill = Color("#164e63")
-		outline = Color("#38bdf8")
-	elif owner == AI:
-		fill = Color("#5f263b")
-		outline = Color("#fb7185")
+	elif owner != UNKNOWN:
+		var faction_color := _faction_color(owner, Color("#64748b"))
+		fill = faction_color.darkened(0.58)
+		outline = faction_color
 	else:
 		fill = Color("#293447")
 		outline = Color("#64748b")
-	if cell in buildable_cells:
+	if buildable_cell_set.has(cell):
 		outline = Color("#4ade80")
-	if cell in mergeable_cells:
+	if mergeable_cell_set.has(cell):
 		outline = Color("#c084fc")
 	# Layered polygons give each tile a small downward extrusion and shadow.
 	var bottom_points := _offset_points(points, Vector2(0.0, Config.TILE_EXTRUSION_DEPTH))
@@ -770,7 +894,7 @@ func _draw_tile(cell: Vector2i) -> void:
 		draw_polyline(PackedVector2Array([points[0], points[1], points[2], points[3], points[4], points[5], points[0]]), Color(1.0, 0.08, 0.04, 0.70 + loss_pulse * 0.25), 3.0, true)
 	var inner_points := _hex_points(center + Vector2(0.0, -1.0), tile_size - 7.0)
 	draw_colored_polygon(inner_points, Color(1.0, 1.0, 1.0, Config.TILE_TOP_HIGHLIGHT_ALPHA))
-	if cell in mergeable_cells:
+	if mergeable_cell_set.has(cell):
 		draw_colored_polygon(points, Color(0.75, 0.45, 1.0, 0.18))
 	if _is_in_barracks_range(cell):
 		draw_colored_polygon(points, Color(0.96, 0.82, 0.28, 0.10))
@@ -784,13 +908,13 @@ func _draw_tile(cell: Vector2i) -> void:
 			if is_intelligence_building_drop_active(cell):
 				landmark_center += get_intelligence_building_drop_offset(cell)
 			_draw_hidden_building_landmark(landmark_center, int(tile["building"]), int(tile["building_level"]), int(tile["unit_class"]))
-		elif tile_type == Config.BARRACKS_TILE_TYPE and cell in purchasable_cells:
+		elif tile_type == Config.BARRACKS_TILE_TYPE and purchasable_cell_set.has(cell):
 			_draw_barracks_tile_landmark(center, not reveal_active)
-		elif tile_type == Config.QUESTION_TILE_TYPE and cell in purchasable_cells:
+		elif tile_type == Config.QUESTION_TILE_TYPE and purchasable_cell_set.has(cell):
 			_draw_question_tile_landmark(center, not reveal_active)
 		elif _is_visible_tile_type(tile_type):
 			_draw_visible_landmark(int(tile.get("visible_tile_result", Config.VISIBLE_FATE)), center, not reveal_active)
-		if cell in purchasable_cells:
+		if purchasable_cell_set.has(cell):
 			var tile_cost := get_tile_cost(cell)
 			var price_color := Color("#f87171") if player_gold < tile_cost else Color("#ffffff")
 			# Keep the price row below the landmark: the small pickaxe sits just left of the number.
@@ -1049,7 +1173,11 @@ func _draw_pickaxe_icon(center: Vector2, scale := 1.0) -> void:
 func _is_in_barracks_range(cell: Vector2i) -> bool:
 	if not tiles.has(barracks_range_cell) or cell == barracks_range_cell:
 		return false
-	return cube_distance(cell, barracks_range_cell) <= Config.BARRACKS_DETECTION_RANGE
+	var dispatch_range := Config.BARRACKS_DETECTION_RANGE
+	var selected_tile: Dictionary = tiles[barracks_range_cell]
+	if int(selected_tile.get("building", EMPTY)) == BARRACKS:
+		dispatch_range = Config.get_barracks_dispatch_range(int(selected_tile.get("building_level", 1)))
+	return cube_distance(cell, barracks_range_cell) <= dispatch_range
 
 func _draw_drag_source_preview(cell: Vector2i) -> void:
 	var tile: Dictionary = tiles[cell]
@@ -1059,8 +1187,16 @@ func _draw_drag_source_preview(cell: Vector2i) -> void:
 	_draw_building(cell, preview_position, int(tile["building"]), int(tile["building_level"]), int(tile["unit_class"]))
 
 func _draw_building(cell: Vector2i, center: Vector2, building: int, level: int, unit_class: int = -1) -> void:
-	if cell == PLAYER_HQ or cell == AI_HQ:
-		var hq_color := Color("#38bdf8") if cell.x < 0 else Color("#fb7185")
+	if HQ_CELLS.has(cell):
+		var hq_owner := int(tiles.get(cell, {}).get("owner", UNKNOWN))
+		var hq_color := _faction_color(hq_owner, Color("#94a3b8"))
+		var hq_destroyed := false
+		var main_ref := get_parent()
+		if main_ref != null and main_ref.has_method("is_hq_destroyed"):
+			hq_destroyed = bool(main_ref.call("is_hq_destroyed", cell))
+		if hq_destroyed:
+			_draw_destroyed_hq(center, hq_color)
+			return
 		draw_circle(center, 19.0, Color(hq_color, 0.25))
 		# Castle base and roof.
 		draw_rect(Rect2(center + Vector2(-15, -4), Vector2(30, 20)), hq_color, true)
@@ -1084,7 +1220,7 @@ func _draw_building(cell: Vector2i, center: Vector2, building: int, level: int, 
 			draw_circle(center, 7.0, mine_color.lightened(0.28))
 			draw_string(ThemeDB.fallback_font, center + Vector2(-5, 4), "$", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, mine_color.darkened(0.45))
 		BARRACKS:
-			_draw_barracks_model(center, level, unit_class, cell in merge_effect_cells, false, int(tiles.get(cell, {}).get("owner", UNKNOWN)))
+			_draw_barracks_model(center, level, unit_class, false, false, int(tiles.get(cell, {}).get("owner", UNKNOWN)))
 		TOWER:
 			var tower_color := _faction_building_color(int(tiles.get(cell, {}).get("owner", UNKNOWN)), Color("#94a3b8"))
 			draw_circle(center, 14.0, tower_color)
@@ -1093,6 +1229,37 @@ func _draw_building(cell: Vector2i, center: Vector2, building: int, level: int, 
 			_draw_merchant_landmark(center)
 		STEEL_BARRIER:
 			_draw_steel_barrier(center, _faction_building_color(int(tiles.get(cell, {}).get("owner", UNKNOWN)), Color("#94a3b8")))
+
+func _draw_destroyed_hq(center: Vector2, faction_color: Color) -> void:
+	var rubble := faction_color.darkened(0.48).lerp(Color("#475569"), 0.45)
+	var rubble_dark := rubble.darkened(0.28)
+	var crack := Color("#111827")
+	_draw_ellipse(center + Vector2(0.0, 16.0), Vector2(24.0, 6.0), Color(0.0, 0.0, 0.0, 0.34))
+	# Broken castle walls and an uneven roof.
+	draw_rect(Rect2(center + Vector2(-16.0, -2.0), Vector2(32.0, 20.0)), rubble, true)
+	draw_rect(Rect2(center + Vector2(-19.0, -8.0), Vector2(8.0, 25.0)), rubble_dark, true)
+	draw_rect(Rect2(center + Vector2(11.0, -5.0), Vector2(8.0, 22.0)), rubble_dark, true)
+	draw_colored_polygon(PackedVector2Array([
+		center + Vector2(-19.0, -8.0), center + Vector2(-7.0, -8.0),
+		center + Vector2(-2.0, -19.0), center + Vector2(6.0, -12.0),
+		center + Vector2(12.0, -22.0), center + Vector2(19.0, -5.0)
+	]), rubble.lightened(0.10))
+	draw_rect(Rect2(center + Vector2(-5.0, 8.0), Vector2(10.0, 10.0)), crack, true)
+	draw_line(center + Vector2(-13.0, -2.0), center + Vector2(-6.0, 5.0), crack, 2.0, true)
+	draw_line(center + Vector2(-6.0, 5.0), center + Vector2(-10.0, 13.0), crack, 2.0, true)
+	draw_line(center + Vector2(7.0, -5.0), center + Vector2(3.0, 3.0), crack, 2.0, true)
+	draw_line(center + Vector2(3.0, 3.0), center + Vector2(10.0, 10.0), crack, 2.0, true)
+	# A simple hanging corpse suspended from the broken roof.
+	var corpse := center + Vector2(0.0, -34.0)
+	draw_line(center + Vector2(0.0, -18.0), corpse + Vector2(0.0, -7.0), Color("#1f2937"), 2.0, true)
+	draw_circle(corpse + Vector2(0.0, -3.0), 5.0, Color("#111827"))
+	draw_line(corpse + Vector2(0.0, 2.0), corpse + Vector2(0.0, 14.0), Color("#111827"), 4.0, true)
+	draw_line(corpse + Vector2(-2.0, 5.0), corpse + Vector2(-10.0, 10.0), Color("#111827"), 3.0, true)
+	draw_line(corpse + Vector2(2.0, 5.0), corpse + Vector2(10.0, 10.0), Color("#111827"), 3.0, true)
+	draw_line(corpse + Vector2(0.0, 14.0), corpse + Vector2(-6.0, 22.0), Color("#111827"), 3.0, true)
+	draw_line(corpse + Vector2(0.0, 14.0), corpse + Vector2(6.0, 22.0), Color("#111827"), 3.0, true)
+	draw_line(corpse + Vector2(-2.0, -5.0), corpse + Vector2(-1.0, -2.0), Color("#f87171"), 1.5, true)
+	draw_line(corpse + Vector2(2.0, -5.0), corpse + Vector2(1.0, -2.0), Color("#f87171"), 1.5, true)
 
 func _draw_steel_barrier(center: Vector2, color: Color) -> void:
 	var dark := color.darkened(0.45)
@@ -1160,6 +1327,11 @@ func _draw_barracks_model(center: Vector2, level: int, unit_class: int, can_merg
 	draw_circle(level_badge_center, 8.0 * scale, Color("#172033"))
 	draw_circle(level_badge_center, 6.0 * scale, accent_color)
 	draw_string(ThemeDB.fallback_font, level_badge_center + Vector2(-3.2 * scale, 3.5 * scale), str(tier), HORIZONTAL_ALIGNMENT_LEFT, -1, int(10.0 * scale), Color("#172033"))
+	var race_badge_center := model_center + Vector2(-18.0, -31.0) * scale
+	var race_color := Config.get_unit_class_race_color(unit_class)
+	draw_circle(race_badge_center, 8.0 * scale, Color("#172033"))
+	draw_circle(race_badge_center, 6.0 * scale, race_color)
+	draw_string(ThemeDB.fallback_font, race_badge_center + Vector2(-3.2 * scale, 3.5 * scale), Config.get_unit_class_race_short_name(unit_class), HORIZONTAL_ALIGNMENT_LEFT, -1, int(9.0 * scale), Color("#172033"))
 
 func _draw_barracks_class_signature(center: Vector2, scale: float, unit_class: int, base: Color, dark: Color, light: Color, accent: Color) -> void:
 	# Each profession gets a different structural silhouette. The colors still
@@ -1218,11 +1390,12 @@ func _draw_barracks_class_signature(center: Vector2, scale: float, unit_class: i
 			]), accent)
 
 func _faction_building_color(owner: int, neutral_color: Color) -> Color:
-	if owner == PLAYER:
-		return Color("#38bdf8")
-	if owner == AI:
-		return Color("#ef4444")
-	return neutral_color
+	return _faction_color(owner, neutral_color)
+
+func _faction_color(owner: int, neutral_color: Color) -> Color:
+	if not Config.FACTION_COLORS.has(owner):
+		return neutral_color
+	return Color(str(Config.FACTION_COLORS[owner]))
 
 func _draw_barracks_level_one(center: Vector2, scale: float, base: Color, dark: Color, light: Color, accent: Color) -> void:
 	var body := Rect2(center + Vector2(-14.0, -6.0) * scale, Vector2(28.0, 19.0) * scale)

@@ -6,11 +6,15 @@ const DURATION := 0.28
 var start_position := Vector2.ZERO
 var target_position := Vector2.ZERO
 var elapsed := 0.0
+var main_ref: Node
 
-func setup(from_position: Vector2, to_position: Vector2) -> void:
+func setup(from_position: Vector2, to_position: Vector2, controller: Node = null) -> void:
 	start_position = from_position
 	target_position = to_position
 	elapsed = 0.0
+	main_ref = controller if controller != null else main_ref
+	visible = true
+	set_process(true)
 	position = Vector2.ZERO
 	z_index = 20
 	queue_redraw()
@@ -18,7 +22,10 @@ func setup(from_position: Vector2, to_position: Vector2) -> void:
 func _process(delta: float) -> void:
 	elapsed += delta
 	if elapsed >= DURATION:
-		queue_free()
+		if main_ref != null and main_ref.has_method("release_monster_attack_effect"):
+			main_ref.release_monster_attack_effect(self)
+		else:
+			queue_free()
 		return
 	queue_redraw()
 

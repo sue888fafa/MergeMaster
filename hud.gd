@@ -8,11 +8,13 @@ const CameraGuideScript := preload("res://camera_guide.gd")
 const CameraGuideIconScript := preload("res://camera_guide_icon.gd")
 const CatCompanionScript := preload("res://cat_companion.gd")
 const MerchantCardIconScript := preload("res://merchant_card_icon.gd")
+const MerchantShopArtScript := preload("res://merchant_shop_art.gd")
 const DivinationHouseArtScript := preload("res://divination_house_art.gd")
 
 signal card_event_finished(owner: int, card_type: int, fate_cell: Vector2i)
 signal card_draw_finished(owner: int, card_id: String, fate_cell: Vector2i)
 signal divination_roll_finished(fate_cell: Vector2i)
+signal merchant_arrival_finished(cell: Vector2i)
 signal merchant_item_selected(index: int)
 signal merchant_dismissed
 signal inventory_item_dropped(item_id: String, screen_position: Vector2)
@@ -20,6 +22,8 @@ signal inventory_item_dropped(item_id: String, screen_position: Vector2)
 var main_ref: Node
 var status_label: Label
 var stats_label: Label
+var fps_label: Label
+var army_label: Label
 var timer_label: Label
 var hq_health_bar: ProgressBar
 var hint_label: Label
@@ -30,10 +34,12 @@ var bombardment_banner_label: Label
 var bombardment_banner_message := ""
 var world_broadcast_message := ""
 var world_broadcast_remaining := 0.0
-var cat_companion: Control
+var cat_companion: CatCompanion
 var end_panel: ColorRect
 var end_label: Label
 var restart_button: Button
+var spectate_button: Button
+var watch_mode_button: Button
 var player_info_button: Button
 var bottom_status_panel: ColorRect
 var player_info_overlay: ColorRect
@@ -101,6 +107,7 @@ var equipment_discard_button: Button
 var merchant_shop_overlay: ColorRect
 var merchant_shop_panel: ColorRect
 var merchant_shop_title: Label
+var merchant_shop_art: Control
 var merchant_shop_buttons: Array[Button] = []
 var merchant_shop_card_icons: Array[Control] = []
 var merchant_shop_card_titles: Array[Label] = []
@@ -109,12 +116,25 @@ var merchant_shop_price_labels: Array[Label] = []
 var merchant_shop_coin_icons: Array[Control] = []
 var merchant_shop_close_button: Button
 var merchant_shop_dismiss_button: Button
+var merchant_arrival_overlay: ColorRect
+var merchant_arrival_panel: ColorRect
+var merchant_arrival_title: Label
+var merchant_arrival_hint: Label
+var merchant_arrival_art: Control
+var merchant_arrival_cards: Array[Control] = []
+var merchant_arrival_tween: Tween
 var building_damage_edge_soft: Panel
 var building_damage_edge: Panel
 var building_damage_edge_tween: Tween
 var viewport_size := Vector2.ZERO
 var camera_guide_refresh_timer := 0.0
 const CAMERA_GUIDE_REFRESH_INTERVAL := 0.10
+var fps_refresh_timer := 0.0
+const FPS_REFRESH_INTERVAL := 0.25
+var last_camera_transform := Transform2D.IDENTITY
+var last_camera_viewport_size := Vector2(-1.0, -1.0)
+var last_territory_revision := -1
+var cached_enemy_territory_near_player := false
 
 const PERSONAL_HINT_LINE_HEIGHT := 24.0
 const PERSONAL_HINT_VISIBLE_LINES := 3.5
@@ -125,6 +145,10 @@ func setup(controller: Node) -> void:
 	_build_ui()
 
 func _process(delta: float) -> void:
+	fps_refresh_timer -= delta
+	if fps_refresh_timer <= 0.0:
+		fps_refresh_timer = FPS_REFRESH_INTERVAL
+		_refresh_fps_label()
 	if world_broadcast_remaining > 0.0:
 		world_broadcast_remaining = maxf(0.0, world_broadcast_remaining - delta)
 		if world_broadcast_remaining <= 0.0:
@@ -174,14 +198,35 @@ func _build_ui() -> void:
 	stats_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(stats_label)
 
+	fps_label = Label.new()
+	fps_label.name = "FpsLabel"
+	fps_label.text = "FPS --"
+	fps_label.add_theme_font_size_override("font_size", 14)
+	fps_label.add_theme_color_override("font_color", Color("#4ade80"))
+	fps_label.add_theme_color_override("font_outline_color", Color(0.02, 0.04, 0.08, 0.94))
+	fps_label.add_theme_constant_override("outline_size", 4)
+	fps_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(fps_label)
+	_refresh_fps_label()
+
 	status_label = Label.new()
 	status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	status_label.add_theme_font_size_override("font_size", 17)
+	status_label.add_theme_font_size_override("font_size", 13)
 	status_label.add_theme_color_override("font_color", Color("#f8fafc"))
 	status_label.add_theme_color_override("font_outline_color", Color(0.02, 0.04, 0.08, 0.92))
 	status_label.add_theme_constant_override("outline_size", 4)
 	status_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(status_label)
+
+	army_label = Label.new()
+	army_label.name = "ArmyCountLabel"
+	army_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	army_label.add_theme_font_size_override("font_size", 13)
+	army_label.add_theme_color_override("font_color", Color("#e2e8f0"))
+	army_label.add_theme_color_override("font_outline_color", Color(0.02, 0.04, 0.08, 0.92))
+	army_label.add_theme_constant_override("outline_size", 4)
+	army_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(army_label)
 
 	hq_health_bar = ProgressBar.new()
 	hq_health_bar.name = "PlayerHQHealthBar"
@@ -246,6 +291,7 @@ func _build_ui() -> void:
 	_build_camera_guides()
 	_build_cat_companion()
 	_build_merchant_shop_panel()
+	_build_merchant_arrival_panel()
 
 	hint_container = Control.new()
 	hint_container.name = "PersonalHintHistory"
@@ -290,6 +336,25 @@ func _build_ui() -> void:
 	restart_button.pressed.connect(_on_restart_pressed)
 	end_panel.add_child(restart_button)
 
+	spectate_button = Button.new()
+	spectate_button.text = "继续观战"
+	spectate_button.position = Vector2(end_panel.size.x * 0.5 + 10.0, 190)
+	spectate_button.size = Vector2(150, 44)
+	spectate_button.add_theme_font_size_override("font_size", 18)
+	spectate_button.pressed.connect(_on_spectate_pressed)
+	spectate_button.visible = false
+	end_panel.add_child(spectate_button)
+
+	watch_mode_button = Button.new()
+	watch_mode_button.name = "WatchModeExitButton"
+	watch_mode_button.text = "退出观战"
+	watch_mode_button.size = Vector2(148, 42)
+	watch_mode_button.add_theme_font_size_override("font_size", 17)
+	watch_mode_button.visible = false
+	watch_mode_button.z_index = 30
+	watch_mode_button.pressed.connect(_on_exit_spectator_pressed)
+	add_child(watch_mode_button)
+
 	_build_player_info_panel()
 	_build_equipment_panels()
 	_build_card_event_panel()
@@ -306,7 +371,7 @@ func _build_cat_companion() -> void:
 	# Keep modal panels created later in the tree above the companion.
 	cat_companion.z_index = 0
 	add_child(cat_companion)
-	cat_companion.call("set_viewport_size", viewport_size)
+	cat_companion.set_viewport_size(viewport_size)
 	cat_companion.inventory_item_dropped.connect(_on_cat_inventory_item_dropped)
 
 func _on_cat_inventory_item_dropped(item_id: String, screen_position: Vector2) -> void:
@@ -320,12 +385,12 @@ func play_card_draw(owner: int, card_id: String, fate_cell: Vector2i) -> void:
 func set_item_inventory(items: Array[String], fly_item_id: String = "", fly_origin: Vector2 = Vector2(-1.0, -1.0)) -> void:
 	if cat_companion == null:
 		return
-	cat_companion.call("set_item_inventory", items)
+	cat_companion.set_item_inventory(items)
 	if not fly_item_id.is_empty():
 		var origin := fly_origin
 		if origin.x < 0.0 or origin.y < 0.0:
 			origin = viewport_size * 0.5
-		cat_companion.call("play_item_fly_in", fly_item_id, origin)
+		cat_companion.play_item_fly_in(fly_item_id, origin)
 
 func get_merchant_item_screen_position(index: int) -> Vector2:
 	if index >= 0 and index < merchant_shop_buttons.size() and is_instance_valid(merchant_shop_buttons[index]):
@@ -335,18 +400,18 @@ func get_merchant_item_screen_position(index: int) -> Vector2:
 func show_officer_bubble(message: String) -> void:
 	if cat_companion == null or message.is_empty():
 		return
-	cat_companion.call("show_bubble", message)
+	cat_companion.show_bubble(message)
 
 func hide_officer_bubble() -> void:
 	if cat_companion == null:
 		return
-	cat_companion.call("hide_bubble")
+	cat_companion.hide_bubble()
 
 func reset_cat_companion() -> void:
 	if cat_companion == null:
 		return
-	cat_companion.call("hide_bubble")
-	cat_companion.call("set_expanded", false)
+	cat_companion.hide_bubble()
+	cat_companion.set_expanded(false)
 
 func _build_merchant_shop_panel() -> void:
 	merchant_shop_overlay = ColorRect.new()
@@ -368,6 +433,11 @@ func _build_merchant_shop_panel() -> void:
 	merchant_shop_title.add_theme_font_size_override("font_size", 28)
 	merchant_shop_title.add_theme_color_override("font_color", Color("#f8fafc"))
 	merchant_shop_panel.add_child(merchant_shop_title)
+
+	merchant_shop_art = MerchantShopArtScript.new()
+	merchant_shop_art.name = "MerchantShopArt"
+	merchant_shop_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	merchant_shop_panel.add_child(merchant_shop_art)
 
 	for index in range(3):
 		var item_button := Button.new()
@@ -428,6 +498,93 @@ func _build_merchant_shop_panel() -> void:
 	merchant_shop_dismiss_button.pressed.connect(_on_merchant_shop_dismiss_pressed)
 	merchant_shop_panel.add_child(merchant_shop_dismiss_button)
 
+func _build_merchant_arrival_panel() -> void:
+	merchant_arrival_overlay = ColorRect.new()
+	merchant_arrival_overlay.name = "MerchantArrivalOverlay"
+	merchant_arrival_overlay.color = Color(0.01, 0.03, 0.07, 0.86)
+	merchant_arrival_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	merchant_arrival_overlay.visible = false
+	add_child(merchant_arrival_overlay)
+
+	merchant_arrival_panel = ColorRect.new()
+	merchant_arrival_panel.name = "MerchantArrivalPanel"
+	merchant_arrival_panel.color = Color("#17233a")
+	merchant_arrival_overlay.add_child(merchant_arrival_panel)
+
+	merchant_arrival_title = Label.new()
+	merchant_arrival_title.text = "商人来了"
+	merchant_arrival_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	merchant_arrival_title.add_theme_font_size_override("font_size", 30)
+	merchant_arrival_title.add_theme_color_override("font_color", Color("#f8fafc"))
+	merchant_arrival_panel.add_child(merchant_arrival_title)
+
+	merchant_arrival_hint = Label.new()
+	merchant_arrival_hint.text = "看看今天带来的三张卡片"
+	merchant_arrival_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	merchant_arrival_hint.add_theme_font_size_override("font_size", 17)
+	merchant_arrival_hint.add_theme_color_override("font_color", Color("#cbd5e1"))
+	merchant_arrival_panel.add_child(merchant_arrival_hint)
+
+	merchant_arrival_art = MerchantShopArtScript.new()
+	merchant_arrival_art.name = "MerchantArrivalArt"
+	merchant_arrival_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	merchant_arrival_art.call("set_presenting_cards", true)
+	merchant_arrival_panel.add_child(merchant_arrival_art)
+
+	for index in range(3):
+		var card_icon: Control = MerchantCardIconScript.new()
+		card_icon.name = "MerchantArrivalCard%d" % index
+		card_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		card_icon.modulate = Color(1.0, 1.0, 1.0, 0.0)
+		merchant_arrival_panel.add_child(card_icon)
+		merchant_arrival_cards.append(card_icon)
+
+func play_merchant_arrival(items: Array[String], cell: Vector2i) -> void:
+	if merchant_arrival_overlay == null:
+		merchant_arrival_finished.emit(cell)
+		return
+	if merchant_arrival_tween != null and merchant_arrival_tween.is_valid():
+		merchant_arrival_tween.kill()
+	merchant_arrival_overlay.visible = true
+	merchant_shop_overlay.visible = false
+	merchant_arrival_art.call("set_presenting_cards", true)
+	merchant_arrival_art.scale = Vector2(0.86, 0.86)
+	for index in range(merchant_arrival_cards.size()):
+		var card_icon := merchant_arrival_cards[index]
+		if index < items.size():
+			card_icon.call("setup_card", str(items[index]))
+			card_icon.visible = true
+			card_icon.position = _merchant_arrival_card_position(index) + Vector2(0.0, 110.0)
+			card_icon.modulate = Color(1.0, 1.0, 1.0, 0.0)
+		else:
+			card_icon.visible = false
+	merchant_arrival_tween = create_tween()
+	merchant_arrival_tween.tween_property(merchant_arrival_art, "scale", Vector2.ONE, 0.28).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	for index in range(merchant_arrival_cards.size()):
+		if not merchant_arrival_cards[index].visible:
+			continue
+		var card_icon := merchant_arrival_cards[index]
+		var card_tween := create_tween()
+		card_tween.set_parallel(true)
+		card_tween.tween_property(card_icon, "position", _merchant_arrival_card_position(index), 0.42).set_delay(0.18 + index * 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+		card_tween.tween_property(card_icon, "modulate", Color.WHITE, 0.24).set_delay(0.18 + index * 0.12)
+	merchant_arrival_tween.tween_interval(1.55)
+	merchant_arrival_tween.tween_callback(_finish_merchant_arrival.bind(cell))
+
+func _merchant_arrival_card_position(index: int) -> Vector2:
+	var card_width := merchant_arrival_panel.size.x
+	var gap := 18.0
+	var width := minf(82.0, (card_width - 72.0 - gap * 2.0) / 3.0)
+	var start_x := (card_width - width * 3.0 - gap * 2.0) * 0.5
+	return Vector2(start_x + index * (width + gap), 224.0)
+
+func _finish_merchant_arrival(cell: Vector2i) -> void:
+	if merchant_arrival_overlay != null:
+		merchant_arrival_overlay.visible = false
+	if merchant_arrival_art != null:
+		merchant_arrival_art.call("set_presenting_cards", false)
+	merchant_arrival_finished.emit(cell)
+
 func _on_merchant_shop_item_pressed(index: int) -> void:
 	if merchant_shop_overlay != null and merchant_shop_overlay.visible:
 		merchant_item_selected.emit(index)
@@ -436,9 +593,11 @@ func _on_merchant_shop_dismiss_pressed() -> void:
 	if merchant_shop_overlay != null and merchant_shop_overlay.visible:
 		merchant_dismissed.emit()
 
-func show_merchant_shop(items: Array[String]) -> void:
+func show_merchant_shop(items: Array[String], player_gold: int = -1) -> void:
 	if merchant_shop_overlay == null:
 		return
+	if player_gold < 0:
+		player_gold = 0
 	for index in range(merchant_shop_buttons.size()):
 		var button := merchant_shop_buttons[index]
 		var card_icon := merchant_shop_card_icons[index]
@@ -453,6 +612,7 @@ func show_merchant_shop(items: Array[String]) -> void:
 			card_title.text = str(item.get("name", "未知卡片"))
 			card_description.text = str(item.get("description", ""))
 			price_label.text = str(Config.MERCHANT_ITEM_COST)
+			price_label.add_theme_color_override("font_color", Color("#ef4444") if player_gold < Config.MERCHANT_ITEM_COST else Color("#fde68a"))
 			card_icon.visible = true
 			card_title.visible = true
 			card_description.visible = true
@@ -469,9 +629,23 @@ func show_merchant_shop(items: Array[String]) -> void:
 			button.disabled = true
 	merchant_shop_overlay.visible = true
 
+func _update_merchant_price_colors(player_gold: int) -> void:
+	var price_color := Color("#ef4444") if player_gold < Config.MERCHANT_ITEM_COST else Color("#fde68a")
+	for price_label in merchant_shop_price_labels:
+		if is_instance_valid(price_label) and price_label.visible:
+			price_label.add_theme_color_override("font_color", price_color)
+
 func hide_merchant_shop() -> void:
 	if merchant_shop_overlay != null:
 		merchant_shop_overlay.visible = false
+
+func hide_merchant_arrival() -> void:
+	if merchant_arrival_tween != null and merchant_arrival_tween.is_valid():
+		merchant_arrival_tween.kill()
+	if merchant_arrival_overlay != null:
+		merchant_arrival_overlay.visible = false
+	if merchant_arrival_art != null:
+		merchant_arrival_art.call("set_presenting_cards", false)
 
 func _build_camera_guides() -> void:
 	camera_guide_layer = Control.new()
@@ -544,7 +718,7 @@ func _focus_nearest_enemy_territory() -> void:
 		var owner := int(tile.get("owner", 0))
 		if owner == 1:
 			player_cells.append(cell)
-		elif owner == 2:
+		elif owner != 1 and owner > 0:
 			enemy_cells.append(cell)
 	if player_cells.is_empty() or enemy_cells.is_empty():
 		return
@@ -579,8 +753,19 @@ func update_camera_guides() -> void:
 	if board_ref == null:
 		clear_camera_guides()
 		return
+	var canvas_transform := get_viewport().get_canvas_transform()
+	var territory_revision := int(main_ref.get("territory_revision"))
+	var camera_changed := canvas_transform.origin != last_camera_transform.origin or canvas_transform.x != last_camera_transform.x or canvas_transform.y != last_camera_transform.y
+	var territory_changed := territory_revision != last_territory_revision
+	if not camera_changed and not territory_changed and viewport_size == last_camera_viewport_size:
+		return
+	last_camera_transform = canvas_transform
+	last_camera_viewport_size = viewport_size
+	if territory_changed:
+		cached_enemy_territory_near_player = _is_enemy_territory_near_player()
+		last_territory_revision = territory_revision
 	var player_hq: Vector2i = main_ref.get("player_hq")
-	var enemy_hq: Vector2i = main_ref.get("ai_hq")
+	var enemy_hq: Vector2i = _nearest_enemy_hq()
 	if not bool(board_ref.call("has_cell", player_hq)) or not bool(board_ref.call("has_cell", enemy_hq)):
 		clear_camera_guides()
 		return
@@ -589,7 +774,7 @@ func update_camera_guides() -> void:
 	var player_visible := _is_hq_visible(player_target)
 	var enemy_visible := _is_hq_visible(enemy_target)
 	var show_player := not player_visible
-	var show_enemy := not enemy_visible and _is_enemy_territory_near_player() and not _is_enemy_territory_visible()
+	var show_enemy := not enemy_visible and cached_enemy_territory_near_player and not _is_enemy_territory_visible()
 
 	var safe_rect := Rect2(42.0, 184.0, maxf(1.0, viewport_size.x - 84.0), maxf(1.0, viewport_size.y - 266.0))
 	camera_guide_layer.size = viewport_size
@@ -651,6 +836,23 @@ func _get_hq_screen_position(cell: Vector2i) -> Vector2:
 	var world_position: Vector2 = board_ref.call("axial_to_world", cell)
 	return get_viewport().get_canvas_transform() * world_position
 
+func _nearest_enemy_hq() -> Vector2i:
+	if main_ref == null or not main_ref.has_method("get_faction_ids"):
+		return main_ref.get("ai_hq") if main_ref != null else Vector2i.ZERO
+	var board_ref: Node = main_ref.get("board") as Node
+	var player_hq: Vector2i = main_ref.get("player_hq")
+	var best_cell: Vector2i = main_ref.get("ai_hq")
+	var best_distance := INF
+	for faction in main_ref.get_faction_ids():
+		if faction == 1 or bool(main_ref.eliminated_factions.get(faction, false)):
+			continue
+		var hq: Vector2i = main_ref.get_hq_cell(faction)
+		var distance := int(board_ref.call("cube_distance", player_hq, hq))
+		if distance < best_distance:
+			best_distance = distance
+			best_cell = hq
+	return best_cell
+
 func _is_enemy_territory_near_player() -> bool:
 	var board_ref: Node = main_ref.get("board") as Node
 	var tiles: Dictionary = board_ref.get("tiles") as Dictionary
@@ -664,7 +866,7 @@ func _is_enemy_territory_near_player() -> bool:
 		var owner := int(tile.get("owner", 0))
 		if owner == 1:
 			player_cells.append(cell)
-		elif owner == 2:
+		elif owner != 1 and owner > 0:
 			enemy_cells.append(cell)
 	if player_cells.is_empty() or enemy_cells.is_empty():
 		return false
@@ -849,10 +1051,12 @@ func refresh_equipment(equipped: Array) -> void:
 		if item.is_empty():
 			icon.texture = null
 			label.text = "装备槽 %d\n未装备" % (index + 1)
+			label.add_theme_color_override("font_color", Color("#cbd5e1"))
 			player_info_equipment_slots[index].tooltip_text = "点击查看装备"
 		else:
 			icon.texture = load(str(item["icon"])) as Texture2D
-			label.text = "%s\n%s" % [item["name"], item["slot"]]
+			label.text = "%s\n%s" % [item["name"], item["description"]]
+			label.add_theme_color_override("font_color", Color(str(item.get("quality_color", "#f8fafc"))))
 			player_info_equipment_slots[index].tooltip_text = "%s：%s" % [item["name"], item["description"]]
 
 func play_equipment_fly_in(equipment_id: String, world_position: Vector2) -> void:
@@ -1380,8 +1584,10 @@ func _layout_ui() -> void:
 	var merchant_height := minf(viewport_size.y * 0.48, 500.0)
 	merchant_shop_panel.size = Vector2(merchant_width, merchant_height)
 	merchant_shop_panel.position = Vector2((viewport_size.x - merchant_width) * 0.5, (viewport_size.y - merchant_height) * 0.5)
-	merchant_shop_title.position = Vector2(20.0, 22.0)
-	merchant_shop_title.size = Vector2(merchant_width - 40.0, 42.0)
+	merchant_shop_title.position = Vector2(104.0, 22.0)
+	merchant_shop_title.size = Vector2(merchant_width - 124.0, 42.0)
+	merchant_shop_art.position = Vector2(12.0, 4.0)
+	merchant_shop_art.size = Vector2(82.0, 76.0)
 	var merchant_gap := 12.0
 	var merchant_button_width := (merchant_width - 40.0 - merchant_gap * 2.0) / 3.0
 	for index in range(merchant_shop_buttons.size()):
@@ -1403,6 +1609,19 @@ func _layout_ui() -> void:
 		merchant_shop_price_labels[index].size = Vector2(42.0, 30.0)
 		merchant_shop_coin_icons[index].position = Vector2(button_size.x - 48.0, button_size.y - 48.0)
 		merchant_shop_coin_icons[index].size = Vector2(30.0, 30.0)
+	merchant_arrival_overlay.size = viewport_size
+	var arrival_width := minf(viewport_size.x * 0.88, 620.0)
+	var arrival_height := minf(viewport_size.y * 0.46, 480.0)
+	merchant_arrival_panel.size = Vector2(arrival_width, arrival_height)
+	merchant_arrival_panel.position = Vector2((viewport_size.x - arrival_width) * 0.5, (viewport_size.y - arrival_height) * 0.5)
+	merchant_arrival_title.position = Vector2(24.0, 24.0)
+	merchant_arrival_title.size = Vector2(arrival_width - 48.0, 42.0)
+	merchant_arrival_hint.position = Vector2(24.0, 68.0)
+	merchant_arrival_hint.size = Vector2(arrival_width - 48.0, 28.0)
+	merchant_arrival_art.position = Vector2((arrival_width - 180.0) * 0.5, 92.0)
+	merchant_arrival_art.size = Vector2(180.0, 132.0)
+	for card_icon in merchant_arrival_cards:
+		card_icon.size = Vector2(82.0, 108.0)
 	player_info_button.position = Vector2(16, 78)
 	player_info_button.size = Vector2(48, 48)
 	if bottom_status_panel != null:
@@ -1410,8 +1629,12 @@ func _layout_ui() -> void:
 		bottom_status_panel.size = Vector2(maxf(1.0, minf(310.0, viewport_size.x - 32.0)), 62.0)
 	stats_label.position = Vector2(16.0, 14.0)
 	stats_label.size = Vector2(150.0, 34.0)
-	status_label.position = Vector2(maxf(1.0, viewport_size.x - 210.0), 14.0)
-	status_label.size = Vector2(194.0, 34.0)
+	fps_label.position = Vector2(16.0, 120.0)
+	fps_label.size = Vector2(100.0, 24.0)
+	status_label.position = Vector2(maxf(1.0, viewport_size.x - 430.0), 14.0)
+	status_label.size = Vector2(minf(414.0, maxf(1.0, viewport_size.x - 450.0)), 34.0)
+	army_label.position = Vector2(maxf(1.0, viewport_size.x - 430.0), 45.0)
+	army_label.size = Vector2(minf(414.0, maxf(1.0, viewport_size.x - 450.0)), 26.0)
 	hq_health_bar.position = Vector2(16.0, 50.0)
 	hq_health_bar.size = Vector2(142.0, 10.0)
 	building_damage_edge_soft.position = Vector2.ZERO
@@ -1433,28 +1656,59 @@ func _layout_ui() -> void:
 	end_panel.position = Vector2((viewport_size.x - end_panel.size.x) * 0.5, (viewport_size.y - end_panel.size.y) * 0.5)
 	end_label.size = Vector2(end_panel.size.x - 40, 110)
 	restart_button.position = Vector2((end_panel.size.x - 160) * 0.5, 190)
+	spectate_button.position = Vector2(end_panel.size.x * 0.5 + 10.0, 190)
+	if watch_mode_button != null:
+		watch_mode_button.position = Vector2(maxf(8.0, viewport_size.x - 156.0), maxf(8.0, viewport_size.y - 58.0))
+		watch_mode_button.size = Vector2(148.0, 42.0)
 	if cat_companion != null:
 		cat_companion.size = Vector2(viewport_size.x, 340.0)
 		cat_companion.position = Vector2.ZERO
 		cat_companion.position.y = maxf(8.0, viewport_size.y - 348.0)
-		cat_companion.call("set_viewport_size", viewport_size)
+		cat_companion.set_viewport_size(viewport_size)
 	update_camera_guides()
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_SIZE_CHANGED:
 		_layout_ui()
 
-func update_state(time_left: float, player_gold: int, _ai_gold: int, player_hp: float, _ai_hp: float, player_tiles: int, ai_tiles: int) -> void:
+func update_state(time_left: float, player_gold: int, _ai_gold: int, player_hp: float, _ai_hp: float, player_tiles: int, ai_tiles: int, faction_scores: Dictionary = {}, faction_armies: Dictionary = {}) -> void:
 	if stats_label == null:
 		return
 	stats_label.text = "金币  %d" % player_gold
-	status_label.text = "领地  %02d : %02d" % [player_tiles, ai_tiles]
+	if merchant_shop_overlay != null and merchant_shop_overlay.visible:
+		_update_merchant_price_colors(player_gold)
+	if faction_scores.is_empty():
+		status_label.text = "领地  %02d : %02d" % [player_tiles, ai_tiles]
+	else:
+		var score_parts: Array[String] = []
+		for faction in Config.FACTION_IDS:
+			var short_name := str(Config.FACTION_NAMES.get(faction, "阵营"))
+			short_name = short_name.replace("玩家", "我").replace("方", "")
+			score_parts.append("%s:%02d" % [short_name, int(faction_scores.get(faction, 0))])
+		status_label.text = "领地 " + " ".join(score_parts)
+	var army_parts: Array[String] = []
+	if faction_armies.is_empty():
+		army_label.text = "士兵  我:%d 敌:%d" % [0, 0]
+	else:
+		for faction in Config.FACTION_IDS:
+			var army_name := str(Config.FACTION_NAMES.get(faction, "阵营"))
+			army_name = army_name.replace("玩家", "我").replace("方", "")
+			army_parts.append("%s:%d" % [army_name, int(faction_armies.get(faction, 0))])
+		army_label.text = "士兵 " + " ".join(army_parts)
 	hq_health_bar.value = clampf(player_hp, 0.0, Config.HQ_MAX_HP)
 	hq_health_bar.visible = player_hp < Config.HQ_MAX_HP - 0.01
 	var total_seconds := maxi(0, int(ceil(time_left)))
 	var minutes := total_seconds / 60
 	var seconds := total_seconds % 60
 	timer_label.text = "%02d:%02d" % [minutes, seconds]
+
+func _refresh_fps_label() -> void:
+	if fps_label == null:
+		return
+	var fps := Engine.get_frames_per_second()
+	fps_label.text = "FPS %d" % fps
+	var fps_color := Color("#4ade80") if fps >= 50 else (Color("#facc15") if fps >= 30 else Color("#f87171"))
+	fps_label.add_theme_color_override("font_color", fps_color)
 
 func show_hint(message: String) -> void:
 	if hint_container == null or message.is_empty():
@@ -1596,6 +1850,19 @@ func _emit_divination_roll() -> void:
 		return
 	divination_roll_emitted = true
 	divination_event_label.text = str(divination_event_current.get("event_name", "占卜结果"))
+	# Keep the final result visible briefly, then close the house before the
+	# main scene applies the result, broadcasts it, or moves the camera.
+	if divination_event_tween != null and divination_event_tween.is_valid():
+		divination_event_tween.kill()
+	divination_event_tween = create_tween()
+	divination_event_tween.tween_interval(Config.FATE_DIVINATION_RESULT_DURATION)
+	divination_event_tween.tween_callback(_close_divination_before_result)
+
+func _close_divination_before_result() -> void:
+	if not divination_event_running:
+		return
+	if divination_overlay:
+		divination_overlay.visible = false
 	divination_roll_finished.emit(divination_event_current.get("fate_cell", Vector2i(999, 999)))
 
 func show_divination_result(message: String) -> void:
@@ -1622,8 +1889,27 @@ func clear_divination_events() -> void:
 
 func show_result(message: String) -> void:
 	clear_camera_guides()
+	spectate_button.visible = false
+	restart_button.visible = true
+	watch_mode_button.visible = false
 	end_panel.visible = true
 	end_label.text = message
+
+func show_player_defeat_choice(message: String) -> void:
+	clear_camera_guides()
+	restart_button.visible = true
+	spectate_button.visible = true
+	watch_mode_button.visible = false
+	end_panel.visible = true
+	end_label.text = message
+
+func show_spectator_exit() -> void:
+	end_panel.visible = false
+	watch_mode_button.visible = true
+
+func hide_spectator_controls() -> void:
+	watch_mode_button.visible = false
+	spectate_button.visible = false
 
 func hide_result() -> void:
 	if end_panel:
@@ -1634,3 +1920,12 @@ func _on_restart_pressed() -> void:
 	clear_camera_guides()
 	if main_ref:
 		main_ref.restart_game()
+
+func _on_spectate_pressed() -> void:
+	_close_player_info()
+	clear_camera_guides()
+	if main_ref:
+		main_ref.continue_spectating()
+
+func _on_exit_spectator_pressed() -> void:
+	get_tree().quit()

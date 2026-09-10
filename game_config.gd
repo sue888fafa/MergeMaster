@@ -1,8 +1,34 @@
 extends RefCounted
 
-const BOARD_RADIUS := 10
-const PLAYER_HQ := Vector2i(-8, 0)
-const AI_HQ := Vector2i(8, 0)
+const BOARD_RADIUS := 14
+const FACTION_PLAYER := 1
+const FACTION_RED := 2
+const FACTION_PURPLE := 3
+const FACTION_GREEN := 4
+const FACTION_IDS := [FACTION_PLAYER, FACTION_RED, FACTION_PURPLE, FACTION_GREEN]
+const AI_FACTION_IDS := [FACTION_RED, FACTION_PURPLE, FACTION_GREEN]
+const PLAYER_HQ := Vector2i(-12, 0)
+const AI_HQ := Vector2i(12, 0)
+const PURPLE_HQ := Vector2i(0, -12)
+const GREEN_HQ := Vector2i(12, -12)
+const FACTION_HQ_CELLS := {
+	FACTION_PLAYER: PLAYER_HQ,
+	FACTION_RED: AI_HQ,
+	FACTION_PURPLE: PURPLE_HQ,
+	FACTION_GREEN: GREEN_HQ
+}
+const FACTION_NAMES := {
+	FACTION_PLAYER: "玩家",
+	FACTION_RED: "红方",
+	FACTION_PURPLE: "紫方",
+	FACTION_GREEN: "绿方"
+}
+const FACTION_COLORS := {
+	FACTION_PLAYER: "#38bdf8",
+	FACTION_RED: "#ef4444",
+	FACTION_PURPLE: "#a855f7",
+	FACTION_GREEN: "#22c55e"
+}
 
 const RANDOM_TILE_TYPE := 0
 const FATE_TILE_TYPE := 1
@@ -23,7 +49,7 @@ const VISIBLE_TILE_TYPE_WEIGHT := 0.10
 const RANDOM_TILE_COST := 1
 const FATE_TILE_COST := 1
 const MINE_TILE_COST := 1
-const QUESTION_EMPTY_WEIGHT := 0.50
+const QUESTION_EMPTY_WEIGHT := 0.45
 const QUESTION_PLANE_WEIGHT := 0.05
 const QUESTION_BOMB_WEIGHT := 0.05
 const QUESTION_CARD_WEIGHT := 0.05
@@ -31,6 +57,7 @@ const QUESTION_WILD_MONSTER_WEIGHT := 0.10
 const QUESTION_CHEST_MONSTER_WEIGHT := 0.0
 const QUESTION_LEVEL_ONE_BARRACKS_WEIGHT := 0.20
 const QUESTION_MERCHANT_WEIGHT := 0.05
+const QUESTION_CHEST_WEIGHT := 0.05
 const INTELLIGENCE_BROADCAST_DURATION := 5.0
 const INTELLIGENCE_NEWS_DURATION := 2.0
 const INTELLIGENCE_INITIAL_SEARCH_RANGE := 5
@@ -42,7 +69,8 @@ const RANDOM_EVENT_CHEST_MONSTER := 2
 const RANDOM_EVENT_CARD := 3
 const RANDOM_EVENT_INTELLIGENCE := 4
 const RANDOM_EVENT_DISPLAY_CARD := 5
-const RANDOM_EVENT_COUNT := 6
+const RANDOM_EVENT_CHEST := 6
+const RANDOM_EVENT_COUNT := 7
 const INTELLIGENCE_FLOOD := 0
 const INTELLIGENCE_LEVEL_TWO_BARRACKS := 1
 const INTELLIGENCE_LEVEL_THREE_BARRACKS := 2
@@ -74,13 +102,14 @@ const FATE_DIVINATION_CAMERA_HOLD_DURATION := 1.0
 const FATE_DIVINATION_CAMERA_RETURN_DURATION := 0.30
 const FATE_DIVINATION_BROADCAST_DURATION := 5.0
 const CHEST_REWARD_AMOUNT := 10
+const QUESTION_CHEST_REWARD_AMOUNT := 3.0
 const CHEST_SEARCH_RANGE := 10
 const CHEST_MONSTER_SPEED_SCALE := 0.5
 const RANDOM_EVENT_ANIMATION_DURATION := 0.8
 const QUESTION_CARD_RESULT_DURATION := 2.0
 const INITIAL_GOLD := 1.0
 const BASE_GOLD_INCOME := 1.0
-const GOLD_INCOME_INTERVAL := 6.0
+const GOLD_INCOME_INTERVAL := 5.0
 const MINE_GOLD_INCOME := 1.0
 const MINE_INCOME_INTERVAL := 10.0
 
@@ -92,11 +121,50 @@ const UNIT_CLASS_ARCHER := 4
 const UNIT_CLASS_COUNT := 5
 const UNIT_CLASS_NAMES := ["坦克", "战士", "法师", "刺客", "弓箭手"]
 const UNIT_CLASS_SHORT_NAMES := ["坦", "战", "法", "刺", "弓"]
+const UNIT_RACE_UNDEAD := 0
+const UNIT_RACE_HORDE := 1
+const UNIT_RACE_ALLIANCE := 2
+const UNIT_RACE_COUNT := 3
+const UNIT_RACE_NAMES := ["亡灵", "部落", "联盟"]
+const UNIT_RACE_SHORT_NAMES := ["亡", "部", "联"]
+const UNIT_RACE_COLORS := ["#a78bfa", "#f97316", "#38bdf8"]
+# Temporary profession-to-race assignment. Keep this table centralized so it
+# can be changed later without touching unit, barracks, or combat code.
+const UNIT_CLASS_RACES := [
+	UNIT_RACE_ALLIANCE, # 坦克
+	UNIT_RACE_HORDE, # 战士
+	UNIT_RACE_ALLIANCE, # 法师
+	UNIT_RACE_UNDEAD, # 刺客
+	UNIT_RACE_HORDE # 弓箭手
+]
 const UNIT_CLASS_BASE_HP := [80.0, 50.0, 35.0, 25.0, 24.0]
 const UNIT_CLASS_BASE_ATTACK := [8.0, 10.0, 25.0, 18.0, 7.0]
 const UNIT_CLASS_ATTACK_INTERVAL := [3.5, 3.0, 4.5, 2.2, 1.5]
 const UNIT_CLASS_ATTACK_RANGE := [0.1, 0.1, 1.4, 0.1, 1.4]
 const UNIT_CLASS_IS_RANGED := [false, false, true, false, true]
+
+static func get_unit_class_race(unit_class: int) -> int:
+	if unit_class < 0 or unit_class >= UNIT_CLASS_COUNT:
+		return -1
+	return int(UNIT_CLASS_RACES[unit_class])
+
+static func get_unit_class_race_name(unit_class: int) -> String:
+	var race := get_unit_class_race(unit_class)
+	if race < 0 or race >= UNIT_RACE_COUNT:
+		return "未知阵营"
+	return str(UNIT_RACE_NAMES[race])
+
+static func get_unit_class_race_short_name(unit_class: int) -> String:
+	var race := get_unit_class_race(unit_class)
+	if race < 0 or race >= UNIT_RACE_COUNT:
+		return "?"
+	return str(UNIT_RACE_SHORT_NAMES[race])
+
+static func get_unit_class_race_color(unit_class: int) -> Color:
+	var race := get_unit_class_race(unit_class)
+	if race < 0 or race >= UNIT_RACE_COUNT:
+		return Color("#94a3b8")
+	return Color(str(UNIT_RACE_COLORS[race]))
 
 const HQ_MAX_HP := 300.0
 const BARRACKS_BASE_HP := 100.0
@@ -104,6 +172,7 @@ const MINE_MAX_HP := 200.0
 const TOWER_MAX_HP := 200.0
 const BARRACKS_PRODUCTION_INTERVAL := 10.0
 const BARRACKS_DETECTION_RANGE := 5
+const BARRACKS_DISPATCH_RANGE_INCREMENT := 2
 const HQ_DETECTION_RANGE := 5
 const BOMBARDMENT_WARNING_START := 90.0
 const BOMBARDMENT_WARNING_DURATION := 30.0
@@ -116,12 +185,25 @@ const BOMBARDMENT_TELEGRAPH_DURATION := 1.5
 const BOMBARDMENT_EFFECT_DURATION := 1.0
 const BOMBARDMENT_BANNER_CLOSE_DELAY := 1.0
 const BOMBARDMENT_DANGER_DISPLAY_DURATION := 1.0
-const MATCH_DURATION := 300.0
+const MATCH_DURATION := 600.0
 const WILD_MONSTER_MAX_HP := 500.0
 const WILD_MONSTER_ATTACK := 5.0
 const WILD_MONSTER_ATTACK_RANGE := 1.4
 const WILD_MONSTER_ATTACK_INTERVAL := 1.0
-const MERCHANT_ITEM_COST := 5
+const WILD_MONSTER_LEVEL_ONE := 1
+const WILD_MONSTER_LEVEL_TWO := 2
+const WILD_MONSTER_LEVEL_THREE := 3
+const WILD_MONSTER_LEVEL_COUNT := 3
+const WILD_MONSTER_LEVEL_HP_MULTIPLIERS := [1.0, 2.0, 4.0]
+const WILD_MONSTER_LEVEL_ATTACK_MULTIPLIERS := [1.0, 2.0, 4.0]
+const WILD_MONSTER_LEVEL_VISUAL_SCALES := [1.0, 1.25, 1.5]
+const WILD_MONSTER_VISIBLE_LEVEL_ONE_WEIGHT := 0.50
+const WILD_MONSTER_VISIBLE_LEVEL_TWO_WEIGHT := 0.30
+const WILD_MONSTER_VISIBLE_LEVEL_THREE_WEIGHT := 0.20
+const WILD_MONSTER_QUESTION_EARLY_END := 180.0
+const WILD_MONSTER_QUESTION_LATE_START := 360.0
+const EQUIPMENT_GOLD_REGEN_INTERVAL := 10.0
+const MERCHANT_ITEM_COST := 3
 const MERCHANT_STORM_RADIUS := 2
 const MERCHANT_STORM_DURATION := 2.0
 const STEEL_BARRIER_MAX_HP := 500.0
@@ -132,9 +214,10 @@ const UNIT_LEVEL_MOVE_INCREMENT := 2.0
 const UNIT_SPEED_SCALE := 0.5
 const UNIT_LEVEL_VISUAL_SCALE := [1.0, 1.5, 2.0, 3.0]
 const MAX_ACTIVE_UNITS_PER_FACTION := 100
+const UNIT_TARGET_REFRESH_INTERVAL := 0.20
 
 const INITIAL_CAMERA_ZOOM := 1.02
-const MIN_CAMERA_ZOOM := 0.30
+const MIN_CAMERA_ZOOM := 0.50
 const MAX_CAMERA_ZOOM := 1.20
 const PORTRAIT_VIEWPORT_WIDTH := 720
 const PORTRAIT_VIEWPORT_HEIGHT := 1280
@@ -167,3 +250,7 @@ const INTELLIGENCE_BUILDING_DROP_HEIGHT := 120.0
 const OFFICER_BUBBLE_DURATION := 2.5
 const GOLD_POPUP_DURATION := 1.1
 const BACKGROUND_FALLBACK_COLOR := "#0b1220"
+
+static func get_barracks_dispatch_range(level: int) -> int:
+	var clamped_level := clampi(level, 1, 4)
+	return maxi(1, BARRACKS_DETECTION_RANGE - 2 + (clamped_level - 1) * BARRACKS_DISPATCH_RANGE_INCREMENT)
