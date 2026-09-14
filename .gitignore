@@ -6,3 +6,10 @@ Thumbs.db
 
 # Godot local user data
 *.tmp
+
+# Local AI art tooling and generated scratch files
+.tools/
+tmp/imagegen/
+
+# Local build and package audit artifacts
+output/

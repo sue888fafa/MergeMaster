@@ -10,6 +10,7 @@ const ITEM_TRANSFER_CERTIFICATE := "transfer_certificate"
 const ITEM_OCCUPY := "occupy"
 const ITEM_BUILD := "build"
 const ITEM_RECYCLE := "recycle"
+const ITEM_STEAL := "steal"
 const SEALED_BARRACKS_PREFIX := "sealed_barracks:"
 
 const ITEM_IDS := [
@@ -28,7 +29,8 @@ const CARD_IDS := [
 	ITEM_TRANSFER_CERTIFICATE,
 	ITEM_OCCUPY,
 	ITEM_BUILD,
-	ITEM_RECYCLE
+	ITEM_RECYCLE,
+	ITEM_STEAL
 ]
 
 const ITEMS := {
@@ -63,6 +65,10 @@ const ITEMS := {
 	ITEM_RECYCLE: {
 		"name": "回收卡",
 		"description": "将回收卡拖到任意兵营上封印，获得一张对应等级和职业的兵营卡。"
+	},
+	ITEM_STEAL: {
+		"name": "窃取卡",
+		"description": "拖到任意阵营的地块上，随机窃取该阵营的一张卡片。没有卡片时窃取失败。"
 	}
 }
 

@@ -2,6 +2,7 @@ class_name GameHUD
 extends CanvasLayer
 
 const Config := preload("res://game_config.gd")
+const Art := preload("res://art_theme.gd")
 const EquipmentDataScript := preload("res://equipment_data.gd")
 const MerchantDataScript := preload("res://merchant_data.gd")
 const CameraGuideScript := preload("res://camera_guide.gd")
@@ -10,6 +11,7 @@ const CatCompanionScript := preload("res://cat_companion.gd")
 const MerchantCardIconScript := preload("res://merchant_card_icon.gd")
 const MerchantShopArtScript := preload("res://merchant_shop_art.gd")
 const DivinationHouseArtScript := preload("res://divination_house_art.gd")
+const FactionStatsDisplayScript := preload("res://faction_stats_display.gd")
 
 signal card_event_finished(owner: int, card_type: int, fate_cell: Vector2i)
 signal card_draw_finished(owner: int, card_id: String, fate_cell: Vector2i)
@@ -24,6 +26,7 @@ var status_label: Label
 var stats_label: Label
 var fps_label: Label
 var army_label: Label
+var faction_stats_display: Control
 var timer_label: Label
 var hq_health_bar: ProgressBar
 var hint_label: Label
@@ -35,7 +38,7 @@ var bombardment_banner_message := ""
 var world_broadcast_message := ""
 var world_broadcast_remaining := 0.0
 var cat_companion: CatCompanion
-var end_panel: ColorRect
+var end_panel: Panel
 var end_label: Label
 var restart_button: Button
 var spectate_button: Button
@@ -43,7 +46,7 @@ var watch_mode_button: Button
 var player_info_button: Button
 var bottom_status_panel: ColorRect
 var player_info_overlay: ColorRect
-var player_info_panel: ColorRect
+var player_info_panel: Panel
 var player_info_close_button: Button
 var player_info_title: Label
 var player_info_attribute_label: Label
@@ -61,7 +64,7 @@ var divination_event_tween: Tween
 var divination_event_running := false
 var divination_roll_emitted := false
 var card_event_overlay: ColorRect
-var card_event_panel: ColorRect
+var card_event_panel: Panel
 var card_event_title: Label
 var card_event_card: Label
 var card_event_detail: Label
@@ -79,7 +82,7 @@ var intelligence_news_current: Dictionary = {}
 var intelligence_news_tween: Tween
 var intelligence_news_running := false
 var intelligence_news_overlay: ColorRect
-var intelligence_news_panel: ColorRect
+var intelligence_news_panel: Panel
 var intelligence_news_kicker: Label
 var intelligence_news_title: Label
 var intelligence_news_content: Label
@@ -90,13 +93,13 @@ var player_camera_guide: Control
 var enemy_camera_guide_icon: Control
 var player_camera_guide_icon: Control
 var equipment_detail_overlay: ColorRect
-var equipment_detail_panel: ColorRect
+var equipment_detail_panel: Panel
 var equipment_detail_icon: TextureRect
 var equipment_detail_title: Label
 var equipment_detail_info: Label
 var equipment_detail_close_button: Button
 var equipment_replacement_overlay: ColorRect
-var equipment_replacement_panel: ColorRect
+var equipment_replacement_panel: Panel
 var equipment_replacement_title: Label
 var equipment_replacement_current_icon: TextureRect
 var equipment_replacement_new_icon: TextureRect
@@ -105,7 +108,7 @@ var equipment_replacement_new_label: Label
 var equipment_replace_button: Button
 var equipment_discard_button: Button
 var merchant_shop_overlay: ColorRect
-var merchant_shop_panel: ColorRect
+var merchant_shop_panel: Panel
 var merchant_shop_title: Label
 var merchant_shop_art: Control
 var merchant_shop_buttons: Array[Button] = []
@@ -117,7 +120,7 @@ var merchant_shop_coin_icons: Array[Control] = []
 var merchant_shop_close_button: Button
 var merchant_shop_dismiss_button: Button
 var merchant_arrival_overlay: ColorRect
-var merchant_arrival_panel: ColorRect
+var merchant_arrival_panel: Panel
 var merchant_arrival_title: Label
 var merchant_arrival_hint: Label
 var merchant_arrival_art: Control
@@ -170,13 +173,16 @@ func _build_ui() -> void:
 	player_info_button.add_theme_color_override("font_color", Color("#f8fafc"))
 	player_info_button.add_theme_color_override("font_hover_color", Color("#ffffff"))
 	var button_normal := StyleBoxFlat.new()
-	button_normal.bg_color = Color("#17233a")
-	button_normal.border_color = Color("#38bdf8")
-	button_normal.set_border_width_all(2)
+	button_normal.bg_color = Art.SUN
+	button_normal.border_color = Art.INK
+	button_normal.set_border_width_all(3)
 	button_normal.set_corner_radius_all(24)
+	button_normal.shadow_color = Art.SHADOW
+	button_normal.shadow_size = 5
+	button_normal.shadow_offset = Vector2(0, 4)
 	var button_hover := button_normal.duplicate()
-	button_hover.bg_color = Color("#243b5a")
-	button_hover.border_color = Color("#7dd3fc")
+	button_hover.bg_color = Color("#ffe989")
+	button_hover.border_color = Art.INK
 	player_info_button.add_theme_stylebox_override("normal", button_normal)
 	player_info_button.add_theme_stylebox_override("hover", button_hover)
 	player_info_button.add_theme_stylebox_override("pressed", button_hover)
@@ -185,7 +191,7 @@ func _build_ui() -> void:
 
 	bottom_status_panel = ColorRect.new()
 	bottom_status_panel.name = "BottomStatusPanel"
-	bottom_status_panel.color = Color(0.03, 0.07, 0.13, 0.86)
+	bottom_status_panel.color = Color(1.0, 0.96, 0.82, 0.92)
 	bottom_status_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	bottom_status_panel.visible = false
 	add_child(bottom_status_panel)
@@ -193,8 +199,8 @@ func _build_ui() -> void:
 	stats_label = Label.new()
 	stats_label.add_theme_font_size_override("font_size", 18)
 	stats_label.add_theme_color_override("font_color", Color("#f8fafc"))
-	stats_label.add_theme_color_override("font_outline_color", Color(0.02, 0.04, 0.08, 0.92))
-	stats_label.add_theme_constant_override("outline_size", 4)
+	stats_label.add_theme_color_override("font_outline_color", Color("#000000"))
+	stats_label.add_theme_constant_override("outline_size", 3)
 	stats_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(stats_label)
 
@@ -216,6 +222,7 @@ func _build_ui() -> void:
 	status_label.add_theme_color_override("font_outline_color", Color(0.02, 0.04, 0.08, 0.92))
 	status_label.add_theme_constant_override("outline_size", 4)
 	status_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	status_label.visible = false
 	add_child(status_label)
 
 	army_label = Label.new()
@@ -226,7 +233,13 @@ func _build_ui() -> void:
 	army_label.add_theme_color_override("font_outline_color", Color(0.02, 0.04, 0.08, 0.92))
 	army_label.add_theme_constant_override("outline_size", 4)
 	army_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	army_label.visible = false
 	add_child(army_label)
+
+	faction_stats_display = FactionStatsDisplayScript.new()
+	faction_stats_display.name = "FactionStatsDisplay"
+	faction_stats_display.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(faction_stats_display)
 
 	hq_health_bar = ProgressBar.new()
 	hq_health_bar.name = "PlayerHQHealthBar"
@@ -249,8 +262,8 @@ func _build_ui() -> void:
 	timer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	timer_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	timer_label.add_theme_font_size_override("font_size", 22)
-	timer_label.add_theme_color_override("font_color", Color("#f8fafc"))
-	timer_label.add_theme_color_override("font_outline_color", Color(0.02, 0.04, 0.08, 0.92))
+	timer_label.add_theme_color_override("font_color", Color("#ffffff"))
+	timer_label.add_theme_color_override("font_outline_color", Color("#000000"))
 	timer_label.add_theme_constant_override("outline_size", 5)
 	timer_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(timer_label)
@@ -313,8 +326,8 @@ func _build_ui() -> void:
 			hint_label = line
 	_render_hint_history()
 
-	end_panel = ColorRect.new()
-	end_panel.color = Color(0.03, 0.07, 0.13, 0.94)
+	end_panel = Panel.new()
+	end_panel.add_theme_stylebox_override("panel", Art.panel_style(Art.PANEL, Art.INK, 26, 4))
 	end_panel.size = Vector2(minf(viewport_size.x * 0.85, 620.0), 280.0)
 	end_panel.position = Vector2((viewport_size.x - end_panel.size.x) * 0.5, (viewport_size.y - end_panel.size.y) * 0.5)
 	end_panel.visible = false
@@ -326,6 +339,7 @@ func _build_ui() -> void:
 	end_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	end_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	end_label.add_theme_font_size_override("font_size", 30)
+	end_label.add_theme_color_override("font_color", Art.INK)
 	end_panel.add_child(end_label)
 
 	restart_button = Button.new()
@@ -360,6 +374,7 @@ func _build_ui() -> void:
 	_build_card_event_panel()
 	_build_divination_panel()
 	_build_intelligence_news_panel()
+	_apply_cartoon_buttons(self)
 	_layout_ui()
 	update_camera_guides()
 
@@ -422,16 +437,16 @@ func _build_merchant_shop_panel() -> void:
 	merchant_shop_overlay.visible = false
 	add_child(merchant_shop_overlay)
 
-	merchant_shop_panel = ColorRect.new()
+	merchant_shop_panel = Panel.new()
 	merchant_shop_panel.name = "MerchantShopPanel"
-	merchant_shop_panel.color = Color("#17233a")
+	merchant_shop_panel.add_theme_stylebox_override("panel", Art.panel_style(Art.PANEL, Art.INK, 28, 4))
 	merchant_shop_overlay.add_child(merchant_shop_panel)
 
 	merchant_shop_title = Label.new()
 	merchant_shop_title.text = "商人商店"
 	merchant_shop_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	merchant_shop_title.add_theme_font_size_override("font_size", 28)
-	merchant_shop_title.add_theme_color_override("font_color", Color("#f8fafc"))
+	merchant_shop_title.add_theme_color_override("font_color", Art.INK)
 	merchant_shop_panel.add_child(merchant_shop_title)
 
 	merchant_shop_art = MerchantShopArtScript.new()
@@ -456,7 +471,7 @@ func _build_merchant_shop_panel() -> void:
 		var card_title := Label.new()
 		card_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		card_title.add_theme_font_size_override("font_size", 17)
-		card_title.add_theme_color_override("font_color", Color("#f8fafc"))
+		card_title.add_theme_color_override("font_color", Art.INK)
 		card_title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		item_button.add_child(card_title)
 		merchant_shop_card_titles.append(card_title)
@@ -466,7 +481,7 @@ func _build_merchant_shop_panel() -> void:
 		card_description.vertical_alignment = VERTICAL_ALIGNMENT_TOP
 		card_description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		card_description.add_theme_font_size_override("font_size", 13)
-		card_description.add_theme_color_override("font_color", Color("#cbd5e1"))
+		card_description.add_theme_color_override("font_color", Art.INK_SOFT)
 		card_description.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		item_button.add_child(card_description)
 		merchant_shop_card_descriptions.append(card_description)
@@ -475,7 +490,7 @@ func _build_merchant_shop_panel() -> void:
 		price_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		price_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		price_label.add_theme_font_size_override("font_size", 18)
-		price_label.add_theme_color_override("font_color", Color("#fde68a"))
+		price_label.add_theme_color_override("font_color", Color("#bf6a12"))
 		price_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		item_button.add_child(price_label)
 		merchant_shop_price_labels.append(price_label)
@@ -506,23 +521,23 @@ func _build_merchant_arrival_panel() -> void:
 	merchant_arrival_overlay.visible = false
 	add_child(merchant_arrival_overlay)
 
-	merchant_arrival_panel = ColorRect.new()
+	merchant_arrival_panel = Panel.new()
 	merchant_arrival_panel.name = "MerchantArrivalPanel"
-	merchant_arrival_panel.color = Color("#17233a")
+	merchant_arrival_panel.add_theme_stylebox_override("panel", Art.panel_style(Art.PANEL_ALT, Art.INK, 28, 4))
 	merchant_arrival_overlay.add_child(merchant_arrival_panel)
 
 	merchant_arrival_title = Label.new()
 	merchant_arrival_title.text = "商人来了"
 	merchant_arrival_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	merchant_arrival_title.add_theme_font_size_override("font_size", 30)
-	merchant_arrival_title.add_theme_color_override("font_color", Color("#f8fafc"))
+	merchant_arrival_title.add_theme_color_override("font_color", Art.INK)
 	merchant_arrival_panel.add_child(merchant_arrival_title)
 
 	merchant_arrival_hint = Label.new()
 	merchant_arrival_hint.text = "看看今天带来的三张卡片"
 	merchant_arrival_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	merchant_arrival_hint.add_theme_font_size_override("font_size", 17)
-	merchant_arrival_hint.add_theme_color_override("font_color", Color("#cbd5e1"))
+	merchant_arrival_hint.add_theme_color_override("font_color", Art.INK_SOFT)
 	merchant_arrival_panel.add_child(merchant_arrival_hint)
 
 	merchant_arrival_art = MerchantShopArtScript.new()
@@ -545,30 +560,12 @@ func play_merchant_arrival(items: Array[String], cell: Vector2i) -> void:
 		return
 	if merchant_arrival_tween != null and merchant_arrival_tween.is_valid():
 		merchant_arrival_tween.kill()
-	merchant_arrival_overlay.visible = true
+	# The presentation is drawn by the merchant landmark on the map. Keep the
+	# arrival overlay hidden so the world-space performance remains visible.
+	merchant_arrival_overlay.visible = false
 	merchant_shop_overlay.visible = false
-	merchant_arrival_art.call("set_presenting_cards", true)
-	merchant_arrival_art.scale = Vector2(0.86, 0.86)
-	for index in range(merchant_arrival_cards.size()):
-		var card_icon := merchant_arrival_cards[index]
-		if index < items.size():
-			card_icon.call("setup_card", str(items[index]))
-			card_icon.visible = true
-			card_icon.position = _merchant_arrival_card_position(index) + Vector2(0.0, 110.0)
-			card_icon.modulate = Color(1.0, 1.0, 1.0, 0.0)
-		else:
-			card_icon.visible = false
 	merchant_arrival_tween = create_tween()
-	merchant_arrival_tween.tween_property(merchant_arrival_art, "scale", Vector2.ONE, 0.28).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	for index in range(merchant_arrival_cards.size()):
-		if not merchant_arrival_cards[index].visible:
-			continue
-		var card_icon := merchant_arrival_cards[index]
-		var card_tween := create_tween()
-		card_tween.set_parallel(true)
-		card_tween.tween_property(card_icon, "position", _merchant_arrival_card_position(index), 0.42).set_delay(0.18 + index * 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-		card_tween.tween_property(card_icon, "modulate", Color.WHITE, 0.24).set_delay(0.18 + index * 0.12)
-	merchant_arrival_tween.tween_interval(1.55)
+	merchant_arrival_tween.tween_interval(Config.MERCHANT_PRESENTATION_DURATION)
 	merchant_arrival_tween.tween_callback(_finish_merchant_arrival.bind(cell))
 
 func _merchant_arrival_card_position(index: int) -> Vector2:
@@ -581,8 +578,6 @@ func _merchant_arrival_card_position(index: int) -> Vector2:
 func _finish_merchant_arrival(cell: Vector2i) -> void:
 	if merchant_arrival_overlay != null:
 		merchant_arrival_overlay.visible = false
-	if merchant_arrival_art != null:
-		merchant_arrival_art.call("set_presenting_cards", false)
 	merchant_arrival_finished.emit(cell)
 
 func _on_merchant_shop_item_pressed(index: int) -> void:
@@ -612,7 +607,7 @@ func show_merchant_shop(items: Array[String], player_gold: int = -1) -> void:
 			card_title.text = str(item.get("name", "未知卡片"))
 			card_description.text = str(item.get("description", ""))
 			price_label.text = str(Config.MERCHANT_ITEM_COST)
-			price_label.add_theme_color_override("font_color", Color("#ef4444") if player_gold < Config.MERCHANT_ITEM_COST else Color("#fde68a"))
+			price_label.add_theme_color_override("font_color", Art.CORAL.darkened(0.18) if player_gold < Config.MERCHANT_ITEM_COST else Color("#a9650f"))
 			card_icon.visible = true
 			card_title.visible = true
 			card_description.visible = true
@@ -630,7 +625,7 @@ func show_merchant_shop(items: Array[String], player_gold: int = -1) -> void:
 	merchant_shop_overlay.visible = true
 
 func _update_merchant_price_colors(player_gold: int) -> void:
-	var price_color := Color("#ef4444") if player_gold < Config.MERCHANT_ITEM_COST else Color("#fde68a")
+	var price_color := Art.CORAL.darkened(0.18) if player_gold < Config.MERCHANT_ITEM_COST else Color("#a9650f")
 	for price_label in merchant_shop_price_labels:
 		if is_instance_valid(price_label) and price_label.visible:
 			price_label.add_theme_color_override("font_color", price_color)
@@ -884,14 +879,14 @@ func _build_player_info_panel() -> void:
 	player_info_overlay.visible = false
 	add_child(player_info_overlay)
 
-	player_info_panel = ColorRect.new()
-	player_info_panel.color = Color("#111c2e")
+	player_info_panel = Panel.new()
+	player_info_panel.add_theme_stylebox_override("panel", Art.panel_style(Art.PANEL_ALT, Art.INK, 26, 4))
 	player_info_overlay.add_child(player_info_panel)
 
 	player_info_title = Label.new()
 	player_info_title.text = "主角信息"
 	player_info_title.add_theme_font_size_override("font_size", 25)
-	player_info_title.add_theme_color_override("font_color", Color("#f8fafc"))
+	player_info_title.add_theme_color_override("font_color", Art.INK)
 	player_info_panel.add_child(player_info_title)
 
 	player_info_close_button = Button.new()
@@ -903,14 +898,14 @@ func _build_player_info_panel() -> void:
 	var attribute_header := Label.new()
 	attribute_header.text = "当前属性"
 	attribute_header.add_theme_font_size_override("font_size", 18)
-	attribute_header.add_theme_color_override("font_color", Color("#fbbf24"))
+	attribute_header.add_theme_color_override("font_color", Color("#b96912"))
 	attribute_header.position = Vector2(28, 76)
 	player_info_panel.add_child(attribute_header)
 
 	player_info_attribute_label = Label.new()
 	player_info_attribute_label.text = "血量       100 / 100\n福德       0\n财运       0"
 	player_info_attribute_label.add_theme_font_size_override("font_size", 17)
-	player_info_attribute_label.add_theme_color_override("font_color", Color("#dbeafe"))
+	player_info_attribute_label.add_theme_color_override("font_color", Art.INK_SOFT)
 	player_info_attribute_label.position = Vector2(34, 116)
 	player_info_attribute_label.size = Vector2(260, 112)
 	player_info_panel.add_child(player_info_attribute_label)
@@ -918,7 +913,7 @@ func _build_player_info_panel() -> void:
 	player_info_equipment_title = Label.new()
 	player_info_equipment_title.text = "装备栏 1"
 	player_info_equipment_title.add_theme_font_size_override("font_size", 18)
-	player_info_equipment_title.add_theme_color_override("font_color", Color("#fbbf24"))
+	player_info_equipment_title.add_theme_color_override("font_color", Color("#b96912"))
 	player_info_equipment_title.position = Vector2(28, 248)
 	player_info_panel.add_child(player_info_equipment_title)
 
@@ -958,14 +953,14 @@ func _build_equipment_panels() -> void:
 	equipment_detail_overlay.visible = false
 	add_child(equipment_detail_overlay)
 
-	equipment_detail_panel = ColorRect.new()
-	equipment_detail_panel.color = Color("#17233a")
+	equipment_detail_panel = Panel.new()
+	equipment_detail_panel.add_theme_stylebox_override("panel", Art.panel_style(Art.PANEL, Art.INK, 26, 4))
 	equipment_detail_overlay.add_child(equipment_detail_panel)
 
 	equipment_detail_title = Label.new()
 	equipment_detail_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	equipment_detail_title.add_theme_font_size_override("font_size", 25)
-	equipment_detail_title.add_theme_color_override("font_color", Color("#f8fafc"))
+	equipment_detail_title.add_theme_color_override("font_color", Art.INK)
 	equipment_detail_panel.add_child(equipment_detail_title)
 
 	equipment_detail_icon = TextureRect.new()
@@ -978,7 +973,7 @@ func _build_equipment_panels() -> void:
 	equipment_detail_info.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	equipment_detail_info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	equipment_detail_info.add_theme_font_size_override("font_size", 18)
-	equipment_detail_info.add_theme_color_override("font_color", Color("#dbeafe"))
+	equipment_detail_info.add_theme_color_override("font_color", Art.INK_SOFT)
 	equipment_detail_panel.add_child(equipment_detail_info)
 
 	equipment_detail_close_button = Button.new()
@@ -993,15 +988,15 @@ func _build_equipment_panels() -> void:
 	equipment_replacement_overlay.visible = false
 	add_child(equipment_replacement_overlay)
 
-	equipment_replacement_panel = ColorRect.new()
-	equipment_replacement_panel.color = Color("#17233a")
+	equipment_replacement_panel = Panel.new()
+	equipment_replacement_panel.add_theme_stylebox_override("panel", Art.panel_style(Art.PANEL, Art.INK, 26, 4))
 	equipment_replacement_overlay.add_child(equipment_replacement_panel)
 
 	equipment_replacement_title = Label.new()
 	equipment_replacement_title.text = "获得同部位装备"
 	equipment_replacement_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	equipment_replacement_title.add_theme_font_size_override("font_size", 24)
-	equipment_replacement_title.add_theme_color_override("font_color", Color("#f8fafc"))
+	equipment_replacement_title.add_theme_color_override("font_color", Art.INK)
 	equipment_replacement_panel.add_child(equipment_replacement_title)
 
 	equipment_replacement_current_icon = TextureRect.new()
@@ -1019,7 +1014,7 @@ func _build_equipment_panels() -> void:
 	equipment_replacement_current_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	equipment_replacement_current_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	equipment_replacement_current_label.add_theme_font_size_override("font_size", 16)
-	equipment_replacement_current_label.add_theme_color_override("font_color", Color("#cbd5e1"))
+	equipment_replacement_current_label.add_theme_color_override("font_color", Art.INK_SOFT)
 	equipment_replacement_panel.add_child(equipment_replacement_current_label)
 
 	equipment_replacement_new_label = Label.new()
@@ -1027,7 +1022,7 @@ func _build_equipment_panels() -> void:
 	equipment_replacement_new_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	equipment_replacement_new_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	equipment_replacement_new_label.add_theme_font_size_override("font_size", 16)
-	equipment_replacement_new_label.add_theme_color_override("font_color", Color("#fef3c7"))
+	equipment_replacement_new_label.add_theme_color_override("font_color", Color("#8d5b13"))
 	equipment_replacement_panel.add_child(equipment_replacement_new_label)
 
 	equipment_replace_button = Button.new()
@@ -1051,7 +1046,7 @@ func refresh_equipment(equipped: Array) -> void:
 		if item.is_empty():
 			icon.texture = null
 			label.text = "装备槽 %d\n未装备" % (index + 1)
-			label.add_theme_color_override("font_color", Color("#cbd5e1"))
+			label.add_theme_color_override("font_color", Art.INK_SOFT)
 			player_info_equipment_slots[index].tooltip_text = "点击查看装备"
 		else:
 			icon.texture = load(str(item["icon"])) as Texture2D
@@ -1156,15 +1151,15 @@ func _build_card_event_panel() -> void:
 	card_event_overlay.visible = false
 	add_child(card_event_overlay)
 
-	card_event_panel = ColorRect.new()
-	card_event_panel.color = Color("#17233a")
+	card_event_panel = Panel.new()
+	card_event_panel.add_theme_stylebox_override("panel", Art.panel_style(Art.PANEL_ALT, Art.PURPLE, 28, 4))
 	card_event_overlay.add_child(card_event_panel)
 
 	card_event_title = Label.new()
 	card_event_title.text = "随机事件 · 翻卡"
 	card_event_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	card_event_title.add_theme_font_size_override("font_size", 26)
-	card_event_title.add_theme_color_override("font_color", Color("#f8fafc"))
+	card_event_title.add_theme_color_override("font_color", Art.INK)
 	card_event_panel.add_child(card_event_title)
 
 	card_event_card = Label.new()
@@ -1185,7 +1180,7 @@ func _build_card_event_panel() -> void:
 	card_event_detail.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	card_event_detail.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	card_event_detail.add_theme_font_size_override("font_size", 17)
-	card_event_detail.add_theme_color_override("font_color", Color("#cbd5e1"))
+	card_event_detail.add_theme_color_override("font_color", Art.INK_SOFT)
 	card_event_panel.add_child(card_event_detail)
 
 func _build_divination_panel() -> void:
@@ -1200,10 +1195,13 @@ func _build_divination_panel() -> void:
 	divination_panel = Panel.new()
 	divination_panel.name = "DivinationHouse"
 	var panel_style := StyleBoxFlat.new()
-	panel_style.bg_color = Color("#17152e")
-	panel_style.border_color = Color("#a78bfa")
-	panel_style.set_border_width_all(2)
-	panel_style.set_corner_radius_all(18)
+	panel_style.bg_color = Art.PANEL_ALT
+	panel_style.border_color = Art.PURPLE
+	panel_style.set_border_width_all(4)
+	panel_style.set_corner_radius_all(22)
+	panel_style.shadow_color = Art.SHADOW
+	panel_style.shadow_size = 8
+	panel_style.shadow_offset = Vector2(0, 6)
 	divination_panel.add_theme_stylebox_override("panel", panel_style)
 	divination_overlay.add_child(divination_panel)
 	divination_house_art = DivinationHouseArtScript.new()
@@ -1214,14 +1212,14 @@ func _build_divination_panel() -> void:
 	divination_title.text = "占卜屋"
 	divination_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	divination_title.add_theme_font_size_override("font_size", 28)
-	divination_title.add_theme_color_override("font_color", Color("#fef3c7"))
+	divination_title.add_theme_color_override("font_color", Art.INK)
 	divination_panel.add_child(divination_title)
 
 	divination_target = Label.new()
 	divination_target.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	divination_target.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	divination_target.add_theme_font_size_override("font_size", 18)
-	divination_target.add_theme_color_override("font_color", Color("#ddd6fe"))
+	divination_target.add_theme_color_override("font_color", Art.PURPLE.darkened(0.18))
 	divination_panel.add_child(divination_target)
 
 	var icon_names := ["卡", "营", "损", "金", "升", "降"]
@@ -1241,7 +1239,7 @@ func _build_divination_panel() -> void:
 	divination_event_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	divination_event_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	divination_event_label.add_theme_font_size_override("font_size", 19)
-	divination_event_label.add_theme_color_override("font_color", Color("#f8fafc"))
+	divination_event_label.add_theme_color_override("font_color", Art.INK_SOFT)
 	divination_panel.add_child(divination_event_label)
 
 	divination_result = Label.new()
@@ -1261,9 +1259,9 @@ func _build_intelligence_news_panel() -> void:
 	intelligence_news_overlay.visible = false
 	add_child(intelligence_news_overlay)
 
-	intelligence_news_panel = ColorRect.new()
+	intelligence_news_panel = Panel.new()
 	intelligence_news_panel.name = "IntelligenceNewsPaper"
-	intelligence_news_panel.color = Color("#eee4cc")
+	intelligence_news_panel.add_theme_stylebox_override("panel", Art.panel_style(Art.PANEL, Color("#9a7438"), 18, 3))
 	intelligence_news_overlay.add_child(intelligence_news_panel)
 
 	intelligence_news_kicker = Label.new()
@@ -1635,6 +1633,12 @@ func _layout_ui() -> void:
 	status_label.size = Vector2(minf(414.0, maxf(1.0, viewport_size.x - 450.0)), 34.0)
 	army_label.position = Vector2(maxf(1.0, viewport_size.x - 430.0), 45.0)
 	army_label.size = Vector2(minf(414.0, maxf(1.0, viewport_size.x - 450.0)), 26.0)
+	if faction_stats_display != null:
+		faction_stats_display.size = Vector2(maxf(230.0, 42.0 + float(Config.FACTION_IDS.size()) * 48.0), 78.0)
+		faction_stats_display.position = Vector2(
+			maxf(8.0, viewport_size.x - faction_stats_display.size.x - 16.0),
+			4.0
+		)
 	hq_health_bar.position = Vector2(16.0, 50.0)
 	hq_health_bar.size = Vector2(142.0, 10.0)
 	building_damage_edge_soft.position = Vector2.ZERO
@@ -1695,6 +1699,16 @@ func update_state(time_left: float, player_gold: int, _ai_gold: int, player_hp: 
 			army_name = army_name.replace("玩家", "我").replace("方", "")
 			army_parts.append("%s:%d" % [army_name, int(faction_armies.get(faction, 0))])
 		army_label.text = "士兵 " + " ".join(army_parts)
+	if faction_stats_display != null:
+		var display_scores := faction_scores
+		var display_armies := faction_armies
+		if display_scores.is_empty():
+			for faction in Config.FACTION_IDS:
+				display_scores[faction] = 0
+		if display_armies.is_empty():
+			for faction in Config.FACTION_IDS:
+				display_armies[faction] = 0
+		faction_stats_display.set_faction_data(Config.FACTION_IDS, display_scores, display_armies)
 	hq_health_bar.value = clampf(player_hp, 0.0, Config.HQ_MAX_HP)
 	hq_health_bar.visible = player_hp < Config.HQ_MAX_HP - 0.01
 	var total_seconds := maxi(0, int(ceil(time_left)))
@@ -1929,3 +1943,19 @@ func _on_spectate_pressed() -> void:
 
 func _on_exit_spectator_pressed() -> void:
 	get_tree().quit()
+
+# Run once after the dynamic HUD is built so every action shares the same
+# rounded, outlined and vertically-pressed cartoon button treatment.
+func _apply_cartoon_buttons(root: Node) -> void:
+	for child in root.get_children():
+		if child is Button:
+			var button := child as Button
+			var color := Art.SKY
+			if button.text.contains("丢弃") or button.text.contains("驱赶") or button.text.contains("退出"):
+				color = Color("#ff9b8f")
+			elif button.text.contains("替换") or button.text.contains("再来"):
+				color = Art.SUN
+			elif button.name.begins_with("MerchantItem"):
+				color = Color("#fff0bd")
+			Art.apply_button(button, color)
+		_apply_cartoon_buttons(child)

@@ -2,6 +2,33 @@ class_name BattleUnit
 extends Node2D
 
 const Config := preload("res://game_config.gd")
+const ATLAS_SHADER := preload("res://shaders/unit_atlas_multimesh.gdshader")
+const UNIT_ART: Array[Texture2D] = [
+	preload("res://assets/generated/unit_tank.png"),
+	preload("res://assets/generated/unit_warrior.png"),
+	preload("res://assets/generated/unit_mage.png"),
+	preload("res://assets/generated/unit_assassin.png"),
+	preload("res://assets/generated/unit_archer.png")
+]
+const UNIT_MASKS: Array[Texture2D] = [
+	preload("res://assets/generated/unit_tank_mask.png"),
+	preload("res://assets/generated/unit_warrior_mask.png"),
+	preload("res://assets/generated/unit_mage_mask.png"),
+	preload("res://assets/generated/unit_assassin_mask.png"),
+	preload("res://assets/generated/unit_archer_mask.png")
+]
+# Atlas-cell order follows the authored six-direction strip. The second and
+# fifth cells are the two diagonal views whose visual labels are opposite to
+# their logical movement names, so the movement vectors are intentionally
+# paired with those cells explicitly below.
+const DIRECTION_VECTORS: Array[Vector2] = [
+	Vector2(0.5, 0.8660254038),
+	Vector2(0.5, -0.8660254038),
+	Vector2(-1.0, 0.0),
+	Vector2(-0.5, -0.8660254038),
+	Vector2(-0.5, 0.8660254038),
+	Vector2(1.0, 0.0)
+]
 
 var faction := 1
 var cell := Vector2i.ZERO
@@ -28,6 +55,12 @@ var combat_target: Dictionary = {}
 var combat_target_refresh_timer := 0.0
 var monster_interrupt_timer := 0.0
 var frozen_until := 0.0
+var batch_rendered := false
+var visual_elapsed := 0.0
+var visual_action := "idle"
+var visual_action_remaining := 0.0
+var visual_direction := 0
+var legacy_sprite: Sprite2D
 
 func setup(owner: int, start_cell: Vector2i, controller: Node, source_level: int = 1, source_class: int = Config.UNIT_CLASS_WARRIOR) -> void:
 	faction = owner
@@ -55,7 +88,10 @@ func setup(owner: int, start_cell: Vector2i, controller: Node, source_level: int
 	combat_target_refresh_timer = 0.0
 	monster_interrupt_timer = 0.0
 	frozen_until = 0.0
-	position = main_ref.board.axial_to_world(cell)
+	position = main_ref.board.get_cell_world_center(cell) if main_ref.board.has_method("get_cell_world_center") else main_ref.board.axial_to_world(cell)
+	batch_rendered = get_parent() != null and get_parent().has_method("is_batch_unit_layer")
+	visible = not batch_rendered
+	_setup_legacy_sprite()
 	queue_redraw()
 
 func get_profession_race() -> int:
@@ -153,7 +189,9 @@ func move_to_garrison_door(delta: float) -> void:
 	if main_ref == null:
 		return
 	var target_position: Vector2 = main_ref.board.axial_to_world(home_cell) + Config.BARRACKS_GARRISON_OFFSET
+	var previous_position := position
 	position = position.move_toward(target_position, move_speed * delta)
+	_update_visual_direction(position - previous_position)
 	moving = position.distance_to(target_position) >= 1.0
 	if not moving:
 		position = target_position
@@ -161,12 +199,25 @@ func move_to_garrison_door(delta: float) -> void:
 func _process(delta: float) -> void:
 	if main_ref == null or main_ref.game_over:
 		return
+	visual_elapsed += delta
+	visual_action_remaining = maxf(0.0, visual_action_remaining - delta)
 	attack_cooldown = max(0.0, attack_cooldown - delta)
+	var previous_position := position
 	main_ref.process_unit(self, delta)
+	var movement := position - previous_position
+	if movement.length_squared() > 0.01:
+		_update_visual_direction(movement)
+	if visual_action_remaining <= 0.0:
+		visual_action = "move" if moving else "idle"
 
 func move_directly_to(target_position: Vector2, delta: float) -> void:
 	moving = true
+	var previous_position := position
 	position = position.move_toward(target_position, move_speed * delta)
+	# Update from the real world-space displacement, rather than from the
+	# logical cell path. This keeps the sprite direction correct while moving
+	# through a hex edge and also covers the last partial movement step.
+	_update_visual_direction(position - previous_position)
 	var entered_cell: Vector2i = main_ref.board.world_to_axial(position)
 	if main_ref.board.has_cell(entered_cell) and entered_cell != cell:
 		var old_cell := cell
@@ -192,29 +243,35 @@ func can_attack() -> bool:
 
 func mark_attack() -> void:
 	attack_cooldown = attack_interval
+	visual_action = "attack"
+	visual_action_remaining = 0.50
+	visual_elapsed = 0.0
 
 func take_damage(amount: float, _attacker: Node = null) -> void:
 	hp -= amount
+	visual_action = "death" if hp <= 0.0 else "hit"
+	visual_action_remaining = 0.60 if hp <= 0.0 else 0.20
+	visual_elapsed = 0.0
 	queue_redraw()
 	if hp <= 0.0:
 		main_ref.remove_unit(self)
 
 func _draw() -> void:
+	if batch_rendered:
+		return
 	var visual_scale: float = float(Config.UNIT_LEVEL_VISUAL_SCALE[clampi(barracks_level, 1, 4) - 1])
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2(visual_scale, visual_scale))
 	var body: Color = main_ref.get_faction_color(faction) if main_ref != null and main_ref.has_method("get_faction_color") else (Color("#38bdf8") if faction == 1 else Color("#ef4444"))
-	# A small humanoid silhouette reads more clearly as a soldier than a dot,
-	# while keeping the same compact footprint on the hex tile.
-	var outline := Color("#0f172a")
-	draw_circle(Vector2(0.0, -6.0), 5.0, outline)
-	draw_circle(Vector2(0.0, -6.0), 3.5, body.lightened(0.12))
-	draw_rect(Rect2(-5.5, -1.0, 11.0, 10.0), outline, true)
-	draw_rect(Rect2(-3.8, -1.0, 7.6, 7.8), body, true)
-	draw_line(Vector2(-4.5, 1.0), Vector2(-9.0, 6.0), outline, 3.0, true)
-	draw_line(Vector2(4.5, 1.0), Vector2(9.0, 6.0), outline, 3.0, true)
-	draw_line(Vector2(-2.5, 8.0), Vector2(-4.5, 14.0), outline, 3.0, true)
-	draw_line(Vector2(2.5, 8.0), Vector2(4.5, 14.0), outline, 3.0, true)
-	_draw_class_signature(body, outline)
+	# Generated chibi sprite replaces the former stick-figure placeholder. A
+	# faction-color halo preserves instant team recognition at board scale.
+	var outline := Color("#293452")
+	# A compact ground shadow anchors the soldier to the tile and remains
+	# independent of the facing direction.
+	_draw_unit_ellipse(Vector2(2.0, 15.0), Vector2(14.0, 5.5), Color(0.02, 0.04, 0.08, 0.48))
+	draw_circle(Vector2(0.0, -1.0), 18.0, Color(body, 0.42))
+	draw_circle(Vector2(0.0, -1.0), 15.5, Color(1.0, 1.0, 1.0, 0.48))
+	var sprite_index := clampi(unit_class, 0, UNIT_ART.size() - 1)
+	_update_legacy_sprite(sprite_index, visual_scale)
 	if is_frozen():
 		draw_arc(Vector2.ZERO, 19.0, 0.0, TAU, 20, Color(0.35, 0.9, 1.0, 0.82), 2.0, true)
 		draw_line(Vector2(-13.0, -15.0), Vector2(-7.0, -21.0), Color("#cffafe"), 2.0, true)
@@ -223,6 +280,80 @@ func _draw() -> void:
 		draw_rect(Rect2(-12, -17, 24, 3), Color("#0f172a"), true)
 		draw_rect(Rect2(-12, -17, 24 * clamp(hp / max_hp, 0.0, 1.0), 3), Color("#4ade80"), true)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+func _setup_legacy_sprite() -> void:
+	if legacy_sprite != null:
+		return
+	legacy_sprite = Sprite2D.new()
+	legacy_sprite.centered = true
+	legacy_sprite.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	legacy_sprite.material = _make_legacy_material()
+	add_child(legacy_sprite)
+
+func _make_legacy_material() -> ShaderMaterial:
+	var material := ShaderMaterial.new()
+	material.shader = ATLAS_SHADER
+	material.set_shader_parameter("atlas_grid", Vector2.ONE)
+	material.set_shader_parameter("frame_uv_size", Vector2.ONE)
+	material.set_shader_parameter("has_faction_mask", true)
+	material.set_shader_parameter("faction_mask", UNIT_MASKS[clampi(unit_class, 0, UNIT_MASKS.size() - 1)])
+	return material
+
+func _update_legacy_sprite(sprite_index: int, visual_scale: float) -> void:
+	if legacy_sprite == null:
+		return
+	legacy_sprite.visible = not batch_rendered
+	legacy_sprite.texture = UNIT_ART[sprite_index]
+	legacy_sprite.position = Vector2(0.0, -3.0 * visual_scale)
+	var texture_size := Vector2(legacy_sprite.texture.get_size())
+	legacy_sprite.scale = Vector2.ONE * (40.0 / maxf(1.0, texture_size.x)) * visual_scale
+	# The legacy fallback has one front-facing image per class. Mirror it for
+	# the left-facing atlas directions so it still follows horizontal travel;
+	# the batch renderer uses the full six-direction runtime atlas.
+	legacy_sprite.flip_h = visual_direction == 2 or visual_direction == 4
+	legacy_sprite.modulate = main_ref.get_faction_color(faction) if main_ref != null and main_ref.has_method("get_faction_color") else Color.WHITE
+	var material := legacy_sprite.material as ShaderMaterial
+	if material != null:
+		material.set_shader_parameter("faction_mask", UNIT_MASKS[sprite_index])
+
+func get_visual_animation() -> String:
+	return visual_action if visual_action_remaining > 0.0 else ("move" if moving else "idle")
+
+func get_visual_direction() -> int:
+	return visual_direction
+
+func get_visual_elapsed() -> float:
+	return visual_elapsed
+
+static func direction_frame_for_movement(movement: Vector2) -> int:
+	if movement.length_squared() < 0.0001:
+		return 0
+	var movement_direction := movement.normalized()
+	var best_dot := -INF
+	var best_direction := 0
+	for index in range(DIRECTION_VECTORS.size()):
+		var candidate_dot := movement_direction.dot(DIRECTION_VECTORS[index])
+		if candidate_dot > best_dot:
+			best_dot = candidate_dot
+			best_direction = index
+	return best_direction
+
+func _update_visual_direction(movement: Vector2) -> void:
+	if movement.length_squared() < 0.0001:
+		return
+	var previous_direction := visual_direction
+	visual_direction = direction_frame_for_movement(movement)
+	if visual_direction != previous_direction:
+		if legacy_sprite != null:
+			legacy_sprite.flip_h = visual_direction == 2 or visual_direction == 4
+		queue_redraw()
+
+func _draw_unit_ellipse(center: Vector2, radii: Vector2, color: Color) -> void:
+	var points := PackedVector2Array()
+	for index in range(18):
+		var angle := TAU * float(index) / 18.0
+		points.append(center + Vector2(cos(angle) * radii.x, sin(angle) * radii.y))
+	draw_colored_polygon(points, color)
 
 func _draw_class_signature(body: Color, outline: Color) -> void:
 	var detail := body.lightened(0.30)

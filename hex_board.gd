@@ -2,6 +2,27 @@ class_name HexBoard
 extends Node2D
 
 const Config := preload("res://game_config.gd")
+const Art := preload("res://art_theme.gd")
+const MERCHANT_ART := preload("res://assets/generated/merchant.png")
+const VISIBLE_GOLD_MINE_ART := preload("res://assets/generated/visible_landmarks/visible_gold_mine.png")
+const TILE_UNCLAIMED_ART := preload("res://assets/generated/tiles/tile_unclaimed.png")
+const TILE_GREEN_ART := preload("res://assets/generated/tiles/tile_green.png")
+const TILE_BLUE_ART := preload("res://assets/generated/tiles/tile_blue.png")
+const TILE_RED_ART := preload("res://assets/generated/tiles/tile_red.png")
+const TILE_PURPLE_ART := preload("res://assets/generated/tiles/tile_purple.png")
+const BARRACKS_ART_PLAYER := preload("res://assets/generated/barracks/barracks_classes_player.png")
+const BARRACKS_ART_RED := preload("res://assets/generated/barracks/barracks_classes_red.png")
+const BARRACKS_ART_PURPLE := preload("res://assets/generated/barracks/barracks_classes_purple.png")
+const BARRACKS_ART_GREEN := preload("res://assets/generated/barracks/barracks_classes_green.png")
+const BARRACKS_ART_REGIONS: Array[Rect2] = [
+	Rect2(0.0, 70.0, 370.0, 420.0),
+	Rect2(370.0, 70.0, 320.0, 420.0),
+	Rect2(90.0, 470.0, 430.0, 490.0),
+	Rect2(510.0, 500.0, 490.0, 490.0),
+	Rect2(670.0, 60.0, 354.0, 440.0)
+]
+const TILE_ART_SCALE_X := 0.90
+const TILE_ART_SCALE_Y := 1.083
 
 signal tile_clicked(cell: Vector2i)
 signal tile_dragged(from_cell: Vector2i, to_cell: Vector2i)
@@ -65,11 +86,14 @@ var barracks_range_cell := Vector2i(999, 999)
 var reveal_animations: Dictionary = {}
 var barracks_merge_animations: Dictionary = {}
 var intelligence_building_drop_animations: Dictionary = {}
+var merchant_presentation_animations: Dictionary = {}
 var bombardment_cells: Array[Vector2i] = []
 var bombardment_warning_cells: Array[Vector2i] = []
 var bombardment_warning_elapsed := 0.0
 var mergeable_effect_elapsed := 0.0
 var merge_effect_refresh_timer := 0.0
+var tile_material_elapsed := 0.0
+var tile_material_redraw_timer := 0.0
 var card_land_loss_cell := Vector2i(999, 999)
 var card_land_loss_elapsed := 0.0
 var camera_focus_tween: Tween
@@ -100,6 +124,7 @@ func _build_map() -> void:
 				tiles[cell] = {
 					"tile_type": Config.BARRACKS_TILE_TYPE,
 					"visible_tile_result": -1,
+					"visible_monster_level": Config.WILD_MONSTER_LEVEL_ONE,
 					"unit_class": -1,
 					"owner": UNKNOWN,
 					"revealed": false,
@@ -109,6 +134,7 @@ func _build_map() -> void:
 					"building_max_hp": 0.0,
 					"production_count": 0,
 					"build_timer": 0.0,
+					"barracks_visual_timer": 0.0,
 					"intelligence_free_claim": false,
 					"chest_reward": false,
 					"chest_reward_amount": 0,
@@ -193,20 +219,29 @@ func _assign_tile_types() -> void:
 			break
 		var visible_cell: Vector2i = candidates.pop_back()
 		tiles[visible_cell]["tile_type"] = Config.VISIBLE_TILE_TYPE
-		tiles[visible_cell]["visible_tile_result"] = _roll_visible_tile_result()
+		var visible_result := _roll_visible_tile_result()
+		tiles[visible_cell]["visible_tile_result"] = visible_result
+		if visible_result == Config.VISIBLE_WILD_MONSTER:
+			tiles[visible_cell]["visible_monster_level"] = _roll_visible_monster_level()
 
 	for cell in candidates:
 		tiles[cell]["tile_type"] = Config.BARRACKS_TILE_TYPE
 		tiles[cell]["visible_tile_result"] = -1
 
 func _roll_visible_tile_result() -> int:
-	return randi_range(Config.VISIBLE_WILD_MONSTER, Config.VISIBLE_FATE)
+	var roll := randf()
+	if roll < Config.VISIBLE_WILD_MONSTER_WEIGHT:
+		return Config.VISIBLE_WILD_MONSTER
+	if roll < Config.VISIBLE_WILD_MONSTER_WEIGHT + Config.VISIBLE_MINE_WEIGHT:
+		return Config.VISIBLE_MINE
+	return Config.VISIBLE_FATE
 
 func reset() -> void:
 	_build_map()
 	reveal_animations.clear()
 	barracks_merge_animations.clear()
 	intelligence_building_drop_animations.clear()
+	merchant_presentation_animations.clear()
 	buildable_cells.clear()
 	mergeable_cells.clear()
 	merge_effect_cells.clear()
@@ -220,6 +255,8 @@ func reset() -> void:
 	bombardment_warning_elapsed = 0.0
 	mergeable_effect_elapsed = 0.0
 	merge_effect_refresh_timer = 0.0
+	tile_material_elapsed = 0.0
+	tile_material_redraw_timer = 0.0
 	clear_card_land_loss_cell()
 	has_animated_building_progress = false
 	drag_start_cell = Vector2i(999, 999)
@@ -306,9 +343,7 @@ func get_building_unit_class(cell: Vector2i) -> int:
 
 func get_tile_cost(cell: Vector2i) -> int:
 	var tile: Dictionary = tiles.get(cell, {})
-	if bool(tile.get("intelligence_free_claim", false)):
-		return 0
-	return Config.RANDOM_TILE_COST
+	return 0 if bool(tile.get("intelligence_free_claim", false)) else Config.RANDOM_TILE_COST
 
 func set_tile_owner(cell: Vector2i, owner: int, revealed := true) -> void:
 	if not tiles.has(cell):
@@ -325,6 +360,7 @@ func set_building(cell: Vector2i, building: int, level: int = 1, unit_class: int
 		tiles[cell]["building_level"] = clampi(level, 1, 4) if building == BARRACKS else 0
 		if building == BARRACKS:
 			tiles[cell]["unit_class"] = clampi(unit_class, 0, Config.UNIT_CLASS_COUNT - 1)
+			tiles[cell]["barracks_visual_timer"] = 0.0
 			var owner := int(tiles[cell].get("owner", UNKNOWN))
 			var base_max := Config.BARRACKS_BASE_HP * float(int(tiles[cell]["building_level"]))
 			if get_parent() != null and get_parent().has_method("get_building_max_hp"):
@@ -352,6 +388,7 @@ func set_building(cell: Vector2i, building: int, level: int = 1, unit_class: int
 		if building != BARRACKS:
 			tiles[cell]["production_count"] = 0
 			tiles[cell]["build_timer"] = 0.0
+			tiles[cell]["barracks_visual_timer"] = 0.0
 		if building != MERCHANT:
 			tiles[cell]["merchant_active"] = false
 			tiles[cell]["merchant_stock"] = []
@@ -501,6 +538,13 @@ func get_building_level(cell: Vector2i) -> int:
 func get_production_count(cell: Vector2i) -> int:
 	return int(tiles.get(cell, {}).get("production_count", 0))
 
+func get_barracks_visual_timer(cell: Vector2i) -> float:
+	return float(tiles.get(cell, {}).get("barracks_visual_timer", 0.0))
+
+func update_barracks_visual_timer(cell: Vector2i, value: float) -> void:
+	if tiles.has(cell):
+		tiles[cell]["barracks_visual_timer"] = maxf(0.0, value)
+
 func set_production_count(cell: Vector2i, value: int) -> void:
 	if tiles.has(cell):
 		tiles[cell]["production_count"] = maxi(0, value)
@@ -560,6 +604,52 @@ func cube_distance(a: Vector2i, b: Vector2i) -> int:
 
 func axial_to_world(cell: Vector2i) -> Vector2:
 	return board_origin + Vector2(sqrt(3.0) * tile_size * (cell.x + cell.y * 0.5), tile_size * 1.5 * cell.y)
+
+func get_cell_world_center(cell: Vector2i) -> Vector2:
+	return axial_to_world(cell)
+
+func get_cell_surface_anchor(cell: Vector2i) -> Vector2:
+	return get_cell_world_center(cell) + Config.TILE_SURFACE_ANCHOR
+
+func get_building_visual_anchor(cell: Vector2i, level: int, unit_class: int) -> Dictionary:
+	var surface := get_cell_surface_anchor(cell)
+	var faction := int(tiles.get(cell, {}).get("owner", UNKNOWN))
+	var tier := clampi(level, 1, 4)
+	var model_scale := float(Config.BARRACKS_LEVEL_SCALE[tier - 1])
+	var model_center := surface + Vector2(0.0, Config.BARRACKS_MODEL_LIFT)
+	var ground_local := 17.0 * model_scale
+	var top_local := -25.0 * model_scale
+	if _has_barracks_art(unit_class, faction):
+		ground_local = 18.0 * model_scale
+		var source_region: Rect2 = BARRACKS_ART_REGIONS[clampi(unit_class, 0, BARRACKS_ART_REGIONS.size() - 1)]
+		var art_width := Config.BARRACKS_ART_BASE_WIDTH * Config.BARRACKS_ART_DISPLAY_SCALE * model_scale
+		var art_height := art_width * source_region.size.y / maxf(1.0, source_region.size.x)
+		top_local = ground_local - art_height
+	else:
+		var silhouette_top := -25.0
+		match unit_class:
+			Config.UNIT_CLASS_MAGE:
+				silhouette_top = -39.0
+			Config.UNIT_CLASS_ASSASSIN:
+				silhouette_top = -33.0
+			Config.UNIT_CLASS_ARCHER:
+				silhouette_top = -36.0
+		if tier >= 3:
+			silhouette_top = minf(silhouette_top, -47.0)
+		if tier >= 4:
+			silhouette_top = minf(silhouette_top, -58.0)
+		top_local = silhouette_top * model_scale
+	var progress_radius := 14.0 * Config.BARRACKS_PROGRESS_VISUAL_SCALE
+	return {
+		"cell_center": get_cell_world_center(cell),
+		"surface": surface,
+		"center": model_center,
+		"ground": model_center + Vector2(0.0, ground_local),
+		"top": model_center.y + top_local,
+		"progress_center": Vector2(model_center.x, model_center.y + top_local - progress_radius + 9.0),
+		"badge_center": model_center + Vector2(19.0, 14.0) * model_scale,
+		"scale": model_scale
+	}
 
 func world_to_axial(position: Vector2) -> Vector2i:
 	var local := position - board_origin
@@ -648,12 +738,21 @@ func _process(delta: float) -> void:
 	_process_reveal_animations(delta)
 	_process_barracks_merge_animations(delta)
 	_process_intelligence_building_drop_animations(delta)
+	_process_merchant_presentation_animations(delta)
 	merge_effect_refresh_timer -= delta
 	if merge_effect_refresh_timer <= 0.0:
 		_refresh_merge_effect_cells()
 		merge_effect_refresh_timer = 0.2
 	if not merge_effect_cells.is_empty():
 		mergeable_effect_elapsed += delta
+	if not purchasable_cell_set.is_empty() or not buildable_cell_set.is_empty() or not mergeable_cell_set.is_empty() or tiles.has(barracks_range_cell):
+		tile_material_elapsed += delta
+		tile_material_redraw_timer -= delta
+		if tile_material_redraw_timer <= 0.0:
+			tile_material_redraw_timer = 0.08
+			queue_redraw()
+	else:
+		tile_material_redraw_timer = 0.0
 	if not bombardment_warning_cells.is_empty():
 		bombardment_warning_elapsed += delta
 		queue_redraw()
@@ -717,6 +816,37 @@ func _process_intelligence_building_drop_animations(delta: float) -> void:
 	for cell in completed_cells:
 		intelligence_building_drop_animations.erase(cell)
 		intelligence_building_drop_finished.emit(cell)
+	queue_redraw()
+
+func start_merchant_presentation(cell: Vector2i) -> void:
+	if not tiles.has(cell) or not bool(tiles[cell].get("merchant_active", false)):
+		return
+	merchant_presentation_animations[cell] = 0.0
+	queue_redraw()
+
+func stop_merchant_presentation(cell: Vector2i) -> void:
+	if merchant_presentation_animations.erase(cell):
+		queue_redraw()
+
+func is_merchant_presenting(cell: Vector2i) -> bool:
+	return merchant_presentation_animations.has(cell)
+
+func clear_merchant_presentations() -> void:
+	if not merchant_presentation_animations.is_empty():
+		merchant_presentation_animations.clear()
+		queue_redraw()
+
+func _process_merchant_presentation_animations(delta: float) -> void:
+	if merchant_presentation_animations.is_empty():
+		return
+	for cell in merchant_presentation_animations.keys():
+		if not tiles.has(cell) or not bool(tiles[cell].get("merchant_active", false)):
+			merchant_presentation_animations.erase(cell)
+			continue
+		merchant_presentation_animations[cell] = minf(
+			float(merchant_presentation_animations[cell]) + delta,
+			Config.MERCHANT_PRESENTATION_DURATION
+		)
 	queue_redraw()
 
 func _can_start_merge_drag(cell: Vector2i) -> bool:
@@ -823,7 +953,9 @@ func _notification(what: int) -> void:
 		_clamp_camera_position()
 
 func _draw() -> void:
-	var visible_world_rect := _get_visible_world_rect().grow(tile_size * 2.0 + Config.TILE_EXTRUSION_DEPTH + Config.TILE_SHADOW_OFFSET_Y)
+	var material := Art.tile_material()
+	var extrusion_depth := float(material.get("extrusion_depth", Config.TILE_EXTRUSION_DEPTH)) + 2.0
+	var visible_world_rect := _get_visible_world_rect().grow(tile_size * 2.0 + extrusion_depth + Config.TILE_SHADOW_OFFSET_Y)
 	# Draw rear rows first so the extruded lower edge sits behind the next row.
 	for cell in draw_cells:
 		if not visible_world_rect.has_point(axial_to_world(cell)):
@@ -833,6 +965,8 @@ func _draw() -> void:
 	# _draw_tile() lets a later tile row cover the preview while it is moving.
 	if long_press_active and tiles.has(drag_start_cell):
 		_draw_drag_source_preview(drag_start_cell)
+	if Config.DEBUG_DRAW_VISUAL_ANCHORS:
+		_draw_visual_anchor_debug()
 
 func _get_visible_world_rect() -> Rect2:
 	var viewport_rect := get_viewport().get_visible_rect()
@@ -843,94 +977,77 @@ func _get_visible_world_rect() -> Rect2:
 
 func _draw_tile(cell: Vector2i) -> void:
 	var tile: Dictionary = tiles[cell]
-	var center := axial_to_world(cell)
+	var center := get_cell_world_center(cell)
+	var surface_anchor := get_cell_surface_anchor(cell)
 	var reveal_active := reveal_animations.has(cell)
 	if reveal_active:
 		var reveal_state: Dictionary = reveal_animations[cell]
 		var reveal_progress := clampf(float(reveal_state["elapsed"]) / Config.TILE_REVEAL_DURATION, 0.0, 1.0)
+		# Overshoot on the way down gives the chunky tile a playful toy-like pop.
 		var jump_offset := sin(reveal_progress * PI) * Config.TILE_REVEAL_JUMP_HEIGHT
+		jump_offset += sin(reveal_progress * PI * 3.0) * 3.0 * (1.0 - reveal_progress)
 		var flip_scale := maxf(abs(cos(reveal_progress * PI)), Config.TILE_REVEAL_MIN_SCALE_X)
 		# Transform absolute world coordinates around this tile's center.
 		draw_set_transform(Vector2(center.x * (1.0 - flip_scale), -jump_offset), 0.0, Vector2(flip_scale, 1.0))
-	var points := _hex_points(center, tile_size - 2.0)
+	var tile_radius := tile_size - 2.0
+	var points := _hex_points(center, tile_radius)
 	var owner: int = int(tile["owner"])
 	var revealed: bool = bool(tile["revealed"])
 	var tile_type: int = int(tile["tile_type"])
-	var fill := Color("#1c2537")
-	var outline := Color("#3d4d67")
-	if not revealed:
-		# Visible tiles keep the same neutral base as every other unopened tile;
-		# their landmark alone communicates the revealed tile type.
-		fill = Color("#111827")
-		outline = Color("#475569")
-	elif owner != UNKNOWN:
-		var faction_color := _faction_color(owner, Color("#64748b"))
-		fill = faction_color.darkened(0.58)
-		outline = faction_color
-	else:
-		fill = Color("#293447")
-		outline = Color("#64748b")
-	if buildable_cell_set.has(cell):
-		outline = Color("#4ade80")
-	if mergeable_cell_set.has(cell):
-		outline = Color("#c084fc")
-	# Layered polygons give each tile a small downward extrusion and shadow.
-	var bottom_points := _offset_points(points, Vector2(0.0, Config.TILE_EXTRUSION_DEPTH))
-	var shadow_points := _offset_points(bottom_points, Vector2(0.0, Config.TILE_SHADOW_OFFSET_Y))
-	draw_colored_polygon(shadow_points, Color(0.0, 0.0, 0.0, Config.TILE_SHADOW_ALPHA))
-	draw_colored_polygon(bottom_points, fill.darkened(0.32))
-	_draw_tile_sides(points, bottom_points, fill)
-	draw_colored_polygon(points, fill)
+	var material := Art.tile_material()
+	var extrusion_depth := float(material.get("extrusion_depth", Config.TILE_EXTRUSION_DEPTH)) + 2.0
+	_draw_tile_shadows(center, tile_radius, extrusion_depth, material)
+	_draw_tile_art(surface_anchor, _tile_art_for(revealed, owner))
+	_draw_tile_state_glow(cell, points)
+
+	# Danger layers are deliberately last so gameplay warnings always outrank
+	# the decorative candy highlights and interaction glows.
 	if cell in bombardment_cells:
-		draw_colored_polygon(points, Color(0.92, 0.08, 0.08, 0.18))
-		draw_polyline(PackedVector2Array([points[0], points[1], points[2], points[3], points[4], points[5], points[0]]), Color(1.0, 0.25, 0.18, 0.78), 2.0, true)
+		draw_colored_polygon(points, Color(0.92, 0.08, 0.08, 0.24))
+		draw_polyline(_closed_polygon(points), Color(1.0, 0.25, 0.18, 0.88), 3.0, true)
 	if cell in bombardment_warning_cells:
 		var warning_pulse := 0.5 + 0.5 * sin(bombardment_warning_elapsed * 10.0)
-		draw_colored_polygon(points, Color(1.0, 0.04, 0.04, 0.10 + warning_pulse * 0.20))
-		draw_polyline(PackedVector2Array([points[0], points[1], points[2], points[3], points[4], points[5], points[0]]), Color(1.0, 0.12, 0.08, 0.45 + warning_pulse * 0.50), 3.0, true)
+		draw_colored_polygon(points, Color(1.0, 0.04, 0.04, 0.12 + warning_pulse * 0.22))
+		draw_polyline(_closed_polygon(points), Color(1.0, 0.12, 0.08, 0.55 + warning_pulse * 0.45), 4.0, true)
 	if cell == card_land_loss_cell:
 		var loss_pulse := 0.5 + 0.5 * sin(card_land_loss_elapsed * 16.0)
 		draw_colored_polygon(points, Color(1.0, 0.03, 0.03, 0.18 + loss_pulse * 0.22))
-		draw_polyline(PackedVector2Array([points[0], points[1], points[2], points[3], points[4], points[5], points[0]]), Color(1.0, 0.08, 0.04, 0.70 + loss_pulse * 0.25), 3.0, true)
-	var inner_points := _hex_points(center + Vector2(0.0, -1.0), tile_size - 7.0)
-	draw_colored_polygon(inner_points, Color(1.0, 1.0, 1.0, Config.TILE_TOP_HIGHLIGHT_ALPHA))
-	if mergeable_cell_set.has(cell):
-		draw_colored_polygon(points, Color(0.75, 0.45, 1.0, 0.18))
-	if _is_in_barracks_range(cell):
-		draw_colored_polygon(points, Color(0.96, 0.82, 0.28, 0.10))
-	var outline_points := PackedVector2Array(points)
-	outline_points.append(points[0])
-	draw_polyline(outline_points, outline, 2.0, true)
+		draw_polyline(_closed_polygon(points), Color(1.0, 0.08, 0.04, 0.72 + loss_pulse * 0.26), 4.0, true)
 
 	if not revealed:
 		if int(tile["building"]) != EMPTY:
-			var landmark_center := center
+			var landmark_center := surface_anchor
 			if is_intelligence_building_drop_active(cell):
 				landmark_center += get_intelligence_building_drop_offset(cell)
 			_draw_hidden_building_landmark(landmark_center, int(tile["building"]), int(tile["building_level"]), int(tile["unit_class"]))
 		elif tile_type == Config.BARRACKS_TILE_TYPE and purchasable_cell_set.has(cell):
-			_draw_barracks_tile_landmark(center, not reveal_active)
+			_draw_barracks_tile_landmark(surface_anchor, not reveal_active)
 		elif tile_type == Config.QUESTION_TILE_TYPE and purchasable_cell_set.has(cell):
-			_draw_question_tile_landmark(center, not reveal_active)
+			_draw_question_tile_landmark(surface_anchor, not reveal_active)
 		elif _is_visible_tile_type(tile_type):
-			_draw_visible_landmark(int(tile.get("visible_tile_result", Config.VISIBLE_FATE)), center, not reveal_active)
+			_draw_visible_landmark(
+				int(tile.get("visible_tile_result", Config.VISIBLE_FATE)),
+				surface_anchor,
+				not reveal_active,
+				int(tile.get("visible_monster_level", Config.WILD_MONSTER_LEVEL_ONE))
+			)
 		if purchasable_cell_set.has(cell):
 			var tile_cost := get_tile_cost(cell)
-			var price_color := Color("#f87171") if player_gold < tile_cost else Color("#ffffff")
-			# Keep the price row below the landmark: the small pickaxe sits just left of the number.
-			_draw_pickaxe_icon(center + Vector2(-11.0, 18.0), 0.55)
-			draw_string(ThemeDB.fallback_font, center + Vector2(-1.0, 24.0), str(tile_cost), HORIZONTAL_ALIGNMENT_LEFT, -1, 16, price_color)
+			var price_color := Color("#d83f52") if player_gold < tile_cost else Art.INK
+			# Keep the price row below the landmark: a small coin sits just left of the number.
+			_draw_coin_icon(surface_anchor + Vector2(-11.0, 18.0), 0.55)
+			draw_string(ThemeDB.fallback_font, surface_anchor + Vector2(-1.0, 24.0), str(tile_cost), HORIZONTAL_ALIGNMENT_LEFT, -1, 16, price_color)
 	else:
 		if not (cell == drag_start_cell and long_press_active):
-			var building_center := center
+			var building_center := surface_anchor
 			if int(tile["building"]) == BARRACKS:
 				building_center += get_barracks_merge_offset(cell)
 			_draw_building(cell, building_center, int(tile["building"]), int(tile["building_level"]), int(tile["unit_class"]))
 			var ground_item_id := str(tile.get("ground_item_id", ""))
 			if not ground_item_id.is_empty():
-				_draw_ground_item_icon(center + Vector2(0.0, -24.0), ground_item_id)
+				_draw_ground_item_icon(surface_anchor + Vector2(0.0, -24.0), ground_item_id)
 			if bool(tile.get("chest_reward", false)):
-				draw_string(ThemeDB.fallback_font, center + Vector2(-13, -25), "宝箱", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("#fbbf24"))
+				draw_string(ThemeDB.fallback_font, surface_anchor + Vector2(-13, -25), "宝箱", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color("#fbbf24"))
 
 	if reveal_active:
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
@@ -941,10 +1058,73 @@ func _offset_points(points: PackedVector2Array, offset: Vector2) -> PackedVector
 		result.append(point + offset)
 	return result
 
-func _draw_tile_sides(top_points: PackedVector2Array, bottom_points: PackedVector2Array, fill: Color) -> void:
-	# Only the three downward-facing edges are visible in this top-down view.
-	for raw_index in [1, 2, 3]:
-		var index: int = int(raw_index)
+func _tile_art_for(revealed: bool, owner: int) -> Texture2D:
+	if not revealed or owner == UNKNOWN:
+		return TILE_UNCLAIMED_ART
+	match owner:
+		Config.FACTION_GREEN:
+			return TILE_GREEN_ART
+		Config.FACTION_PLAYER:
+			return TILE_BLUE_ART
+		Config.FACTION_RED:
+			return TILE_RED_ART
+		Config.FACTION_PURPLE:
+			return TILE_PURPLE_ART
+		_:
+			return TILE_UNCLAIMED_ART
+
+func _draw_tile_art(center: Vector2, texture: Texture2D) -> void:
+	if texture == null:
+		return
+	var width := 104.0 * TILE_ART_SCALE_X
+	var height := width * texture.get_height() / maxf(1.0, texture.get_width())
+	# Apply the vertical calibration independently so the top surface fills
+	# the row spacing without changing the logical hex-grid coordinates.
+	height *= TILE_ART_SCALE_Y / maxf(TILE_ART_SCALE_X, 0.001)
+	var top_offset := -54.0 * TILE_ART_SCALE_Y
+	draw_texture_rect(texture, Rect2(center + Vector2(-width * 0.5, top_offset), Vector2(width, height)), false)
+
+func _draw_visual_anchor_debug() -> void:
+	for cell in draw_cells:
+		if not tiles.has(cell):
+			continue
+		var center := get_cell_world_center(cell)
+		var surface := get_cell_surface_anchor(cell)
+		draw_line(center + Vector2(-5.0, 0.0), center + Vector2(5.0, 0.0), Color("#f43f5e"), 1.5, true)
+		draw_line(center + Vector2(0.0, -5.0), center + Vector2(0.0, 5.0), Color("#f43f5e"), 1.5, true)
+		draw_circle(surface, 2.5, Color("#facc15"))
+		var tile: Dictionary = tiles[cell]
+		if bool(tile.get("revealed", false)) and int(tile.get("building", EMPTY)) == BARRACKS:
+			var anchor := get_building_visual_anchor(cell, int(tile.get("building_level", 1)), int(tile.get("unit_class", -1)))
+			draw_circle(Vector2(anchor["ground"]), 3.0, Color("#22c55e"))
+			draw_circle(Vector2(anchor["progress_center"]), 3.0, Color("#f59e0b"))
+
+func _closed_polygon(points: PackedVector2Array) -> PackedVector2Array:
+	var closed := PackedVector2Array(points)
+	if not points.is_empty():
+		closed.append(points[0])
+	return closed
+
+func _draw_tile_shadows(center: Vector2, radius: float, extrusion_depth: float, material: Dictionary) -> void:
+	# Two warm, offset silhouettes approximate a soft mobile-friendly shadow
+	# without adding a shader or texture lookup per tile.
+	var far_shadow := _hex_points(
+		center + Vector2(3.0, extrusion_depth + Config.TILE_SHADOW_OFFSET_Y + 3.0),
+		radius + 3.0
+	)
+	var near_shadow := _hex_points(
+		center + Vector2(1.0, extrusion_depth + Config.TILE_SHADOW_OFFSET_Y),
+		radius + 1.0
+	)
+	draw_colored_polygon(far_shadow, Color(0.35, 0.22, 0.28, float(material["shadow_far_alpha"])))
+	draw_colored_polygon(near_shadow, Color(0.26, 0.17, 0.22, float(material["shadow_near_alpha"])))
+
+func _draw_tile_sides(top_points: PackedVector2Array, bottom_points: PackedVector2Array, fill: Color, material: Dictionary) -> void:
+	# Separate values for each visible face make the light direction readable.
+	var side_darkness: Array = material["side_darkness"]
+	var visible_edges := [1, 2, 3]
+	for slot in range(visible_edges.size()):
+		var index: int = int(visible_edges[slot])
 		var next_index: int = (index + 1) % top_points.size()
 		var side_points := PackedVector2Array([
 			top_points[index],
@@ -952,10 +1132,99 @@ func _draw_tile_sides(top_points: PackedVector2Array, bottom_points: PackedVecto
 			bottom_points[next_index],
 			bottom_points[index]
 		])
-		var side_color := fill.darkened(0.23 + 0.07 * float(index - 1))
+		var side_color := fill.darkened(float(side_darkness[slot]))
 		draw_colored_polygon(side_points, side_color)
-		if index == 2:
-			draw_line(top_points[index], top_points[next_index], Color(1.0, 1.0, 1.0, Config.TILE_SIDE_HIGHLIGHT_ALPHA), 1.0, true)
+		draw_line(bottom_points[index], bottom_points[next_index], fill.darkened(0.52), 1.2, true)
+		if slot == 0:
+			draw_line(
+				top_points[index],
+				top_points[next_index],
+				Color(1.0, 1.0, 1.0, float(material["side_highlight_alpha"])),
+				1.4,
+				true
+			)
+
+func _draw_tile_top(cell: Vector2i, center: Vector2, radius: float, outer_points: PackedVector2Array, fill: Color, outline: Color, revealed: bool, material: Dictionary) -> void:
+	# Dark outer shell, bright bevel and inset face create a rounded candy edge.
+	draw_colored_polygon(outer_points, fill.darkened(float(material["rim_darkness"])))
+	var bevel_points := _hex_points(center + Vector2(-0.5, -0.8), radius - 2.8)
+	draw_colored_polygon(bevel_points, fill.lightened(float(material["bevel_lighten"])))
+	var face_center := center + Vector2(-0.7, -1.2)
+	var face_points := _hex_points(face_center, radius - 6.2)
+	var face_color := fill.lightened(float(material["face_lighten"]))
+	draw_colored_polygon(face_points, face_color)
+
+	# A broad cool shade on the lower-right and a bright upper-left plane make
+	# the illumination directional instead of looking like a white wash.
+	var lower_shade := PackedVector2Array([
+		face_center + Vector2(35.0, -10.0),
+		face_center + Vector2(35.0, 17.0),
+		face_center + Vector2(0.0, 39.0),
+		face_center + Vector2(-5.0, 30.0),
+		face_center + Vector2(22.0, 10.0),
+	])
+	draw_colored_polygon(lower_shade, Color(face_color.darkened(0.42), float(material["lower_shade_alpha"])))
+	var light_facet := PackedVector2Array([
+		face_center + Vector2(-34.0, -17.0),
+		face_center + Vector2(-2.0, -39.0),
+		face_center + Vector2(22.0, -23.0),
+		face_center + Vector2(10.0, -13.0),
+		face_center + Vector2(-27.0, -2.0),
+	])
+	draw_colored_polygon(light_facet, Color(1.0, 1.0, 1.0, float(material["facet_alpha"])))
+
+	var face_loop := _closed_polygon(face_points)
+	draw_polyline(face_loop, Color(1.0, 1.0, 1.0, float(material["inner_glow_alpha"])), 1.5, true)
+	_draw_tile_texture(cell, face_center, face_color, revealed, material)
+	_draw_tile_specular(face_center, material)
+	draw_polyline(_closed_polygon(outer_points), outline, float(material["outline_width"]), true)
+
+func _draw_tile_specular(center: Vector2, material: Dictionary) -> void:
+	var alpha := float(material["specular_alpha"])
+	draw_line(center + Vector2(-25.0, -17.0), center + Vector2(-12.0, -28.0), Color(1.0, 1.0, 1.0, alpha), 3.3, true)
+	draw_line(center + Vector2(-9.0, -29.5), center + Vector2(-4.0, -31.0), Color(1.0, 1.0, 1.0, alpha * 0.80), 2.3, true)
+	draw_circle(center + Vector2(1.0, -30.5), 1.7, Color(1.0, 1.0, 1.0, alpha * 0.64))
+
+func _draw_tile_texture(cell: Vector2i, center: Vector2, face_color: Color, revealed: bool, material: Dictionary) -> void:
+	var seed := absi(cell.x * 92821 + cell.y * 68917 + cell.x * cell.y * 37)
+	var count := int(material["texture_count"])
+	var alpha := float(material["texture_alpha"]) * (1.0 if revealed else 0.72)
+	var texture_style := int(material["texture_style"])
+	for index in range(count):
+		var point_seed := seed + index * 7919
+		var point := center + Vector2(
+			float(point_seed % 43) - 21.0,
+			float(int(point_seed / 43) % 29) - 13.0
+		)
+		match texture_style:
+			0:
+				# Tiny trapped highlights suggest clear hard-candy depth.
+				draw_circle(point + Vector2(0.5, 0.8), 1.5, Color(face_color.darkened(0.40), alpha * 0.35))
+				draw_circle(point, 1.0, Color(1.0, 1.0, 1.0, alpha))
+			1:
+				# Wider translucent bubbles suit the softer gummy preset.
+				draw_circle(point, 2.2, Color(face_color.darkened(0.32), alpha * 0.50))
+				draw_circle(point + Vector2(-0.4, -0.5), 1.4, Color(1.0, 1.0, 1.0, alpha * 0.70))
+			2:
+				# Fine irregular sugar grains keep the cream finish matte.
+				var grain_radius := 0.65 + float(point_seed % 3) * 0.25
+				draw_circle(point, grain_radius, Color(1.0, 0.98, 0.90, alpha))
+
+func _draw_tile_state_glow(cell: Vector2i, points: PackedVector2Array) -> void:
+	var glow_color := Color.TRANSPARENT
+	if _is_in_barracks_range(cell):
+		glow_color = Color("#ffd34e")
+	if buildable_cell_set.has(cell):
+		glow_color = Color("#65e887")
+	if mergeable_cell_set.has(cell):
+		glow_color = Color("#d795ff")
+	if glow_color.a <= 0.0:
+		return
+	var phase := float(absi(cell.x * 11 + cell.y * 7) % 13) * 0.12
+	var pulse := 0.5 + 0.5 * sin(tile_material_elapsed * 3.8 + phase)
+	var outline_points := _closed_polygon(points)
+	draw_polyline(outline_points, Color(glow_color, 0.13 + pulse * 0.12), 6.5, true)
+	draw_polyline(outline_points, Color(glow_color, 0.72 + pulse * 0.24), 2.5, true)
 
 func _draw_ellipse(center: Vector2, radii: Vector2, color: Color) -> void:
 	var points := PackedVector2Array()
@@ -967,23 +1236,38 @@ func _draw_ellipse(center: Vector2, radii: Vector2, color: Color) -> void:
 func _is_visible_tile_type(tile_type: int) -> bool:
 	return tile_type == Config.VISIBLE_TILE_TYPE
 
-func _draw_visible_landmark(visible_result: int, center: Vector2, use_local_transform := true) -> void:
+func _draw_visible_landmark(visible_result: int, center: Vector2, use_local_transform := true, monster_level := Config.WILD_MONSTER_LEVEL_ONE) -> void:
 	var landmark_origin := center + Config.VISIBLE_LANDMARK_OFFSET
-	var landmark_center := landmark_origin
+	# Visible-tile landmarks share one display multiplier so the model,
+	# outline and visible monster level marker remain aligned when resized.
+	var landmark_scale := Config.VISIBLE_LANDMARK_SCALE * Config.VISIBLE_LANDMARK_DISPLAY_SCALE
+	if visible_result == Config.VISIBLE_WILD_MONSTER:
+		landmark_scale *= Config.VISIBLE_WILD_LANDMARK_SCALE
 	if use_local_transform:
-		draw_set_transform(landmark_origin, 0.0, Vector2(Config.VISIBLE_LANDMARK_SCALE, Config.VISIBLE_LANDMARK_SCALE))
-		landmark_center = Vector2.ZERO
+		draw_set_transform(landmark_origin, 0.0, Vector2(landmark_scale, landmark_scale))
+	var landmark_center := Vector2.ZERO if use_local_transform else landmark_origin
 	match visible_result:
 		Config.VISIBLE_FATE:
 			_draw_fate_crystal_ball_landmark(landmark_center)
 		Config.VISIBLE_WILD_MONSTER:
-			_draw_wild_landmark(landmark_center)
-		Config.VISIBLE_LEVEL_TWO_BARRACKS:
-			_draw_level_two_city_landmark(landmark_center)
+			_draw_wild_landmark(landmark_center, monster_level)
 		Config.VISIBLE_MINE:
 			_draw_mine_landmark(landmark_center)
 	if use_local_transform:
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+func _draw_visible_landmark_art(center: Vector2, texture: Texture2D, width: float, top_ratio: float) -> void:
+	if texture == null:
+		return
+	var height := width * texture.get_height() / maxf(1.0, texture.get_width())
+	draw_texture_rect(texture, Rect2(center + Vector2(-width * 0.5, -height * top_ratio), Vector2(width, height)), false)
+
+func _draw_visible_wild_level(center: Vector2, monster_level: int) -> void:
+	var level := clampi(monster_level, Config.WILD_MONSTER_LEVEL_ONE, Config.WILD_MONSTER_LEVEL_THREE)
+	var level_center := center + Vector2(45.0, -45.0)
+	draw_circle(level_center + Vector2(1.0, 1.0), 8.0, Color(0.0, 0.0, 0.0, 0.48))
+	draw_circle(level_center, 7.0, Color("#facc15"))
+	draw_string(ThemeDB.fallback_font, level_center + Vector2(-3.0, 3.5), str(level), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("#111827"))
 
 func _draw_barracks_tile_landmark(center: Vector2, use_local_transform := true) -> void:
 	var landmark_origin := center + Config.VISIBLE_LANDMARK_OFFSET
@@ -991,7 +1275,7 @@ func _draw_barracks_tile_landmark(center: Vector2, use_local_transform := true) 
 	if use_local_transform:
 		draw_set_transform(landmark_origin, 0.0, Vector2(Config.VISIBLE_LANDMARK_SCALE, Config.VISIBLE_LANDMARK_SCALE))
 		landmark_center = Vector2.ZERO
-	_draw_soldier_avatar(landmark_center)
+	_draw_gladiator_helmet(landmark_center, 0.76)
 	if use_local_transform:
 		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
@@ -1049,6 +1333,34 @@ func _draw_soldier_avatar(center: Vector2) -> void:
 	draw_line(helmet_center + Vector2(-12.0, -3.0), helmet_center + Vector2(12.0, -3.0), black, 3.0, true)
 	draw_line(helmet_center + Vector2(-8.0, 11.0), helmet_center + Vector2(8.0, 11.0), black, 2.5, true)
 
+func _draw_gladiator_helmet(center: Vector2, scale := 0.76) -> void:
+	var black := Color("#0b1220")
+	var metal := Color("#d7dde5")
+	var metal_dark := Color("#8b98a8")
+	var c := center + Vector2(0.0, 5.0) * scale
+	var p := func(offset: Vector2) -> Vector2: return c + offset * scale
+	# Compact arena helmet: crest, rounded dome, brow and cheek guards.
+	var crest := PackedVector2Array([
+		p.call(Vector2(-3.0, -17.0)), p.call(Vector2(0.0, -25.0)), p.call(Vector2(3.0, -17.0)),
+		p.call(Vector2(6.0, -13.0)), p.call(Vector2(-6.0, -13.0))
+	])
+	draw_colored_polygon(crest, black)
+	var dome := PackedVector2Array([
+		p.call(Vector2(-14.0, -4.0)), p.call(Vector2(-12.0, -13.0)), p.call(Vector2(-6.0, -20.0)),
+		p.call(Vector2(0.0, -22.0)), p.call(Vector2(6.0, -20.0)), p.call(Vector2(12.0, -13.0)),
+		p.call(Vector2(14.0, -4.0)), p.call(Vector2(9.0, 0.0)), p.call(Vector2(-9.0, 0.0))
+	])
+	draw_colored_polygon(dome, metal)
+	draw_polyline(PackedVector2Array([dome[0], dome[1], dome[2], dome[3], dome[4], dome[5], dome[6], dome[7], dome[8], dome[0]]), black, maxf(1.0, 2.2 * scale), true)
+	var left_guard := PackedVector2Array([p.call(Vector2(-13.0, -3.0)), p.call(Vector2(-6.0, 0.0)), p.call(Vector2(-8.0, 10.0)), p.call(Vector2(-14.0, 7.0))])
+	var right_guard := PackedVector2Array([p.call(Vector2(6.0, 0.0)), p.call(Vector2(13.0, -3.0)), p.call(Vector2(14.0, 7.0)), p.call(Vector2(8.0, 10.0))])
+	draw_colored_polygon(left_guard, metal_dark)
+	draw_colored_polygon(right_guard, metal_dark)
+	draw_polyline(PackedVector2Array([left_guard[0], left_guard[1], left_guard[2], left_guard[3], left_guard[0]]), black, maxf(1.0, 1.8 * scale), true)
+	draw_polyline(PackedVector2Array([right_guard[0], right_guard[1], right_guard[2], right_guard[3], right_guard[0]]), black, maxf(1.0, 1.8 * scale), true)
+	draw_line(p.call(Vector2(-12.0, -2.0)), p.call(Vector2(12.0, -2.0)), black, maxf(1.0, 2.8 * scale), true)
+	draw_line(p.call(Vector2(-8.0, 11.0)), p.call(Vector2(8.0, 11.0)), black, maxf(1.0, 2.2 * scale), true)
+
 func _draw_hidden_building_landmark(center: Vector2, building: int, level: int, unit_class: int) -> void:
 	var landmark_origin := center + Config.VISIBLE_LANDMARK_OFFSET
 	draw_set_transform(landmark_origin, 0.0, Vector2(Config.VISIBLE_LANDMARK_SCALE, Config.VISIBLE_LANDMARK_SCALE))
@@ -1059,77 +1371,221 @@ func _draw_hidden_building_landmark(center: Vector2, building: int, level: int, 
 			_draw_barracks_model(Vector2.ZERO, level, unit_class, false, true)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
-func _draw_wild_landmark(center: Vector2) -> void:
-	var body := Color(Config.VISIBLE_LANDMARK_COLOR)
-	var dark := Color(Config.VISIBLE_LANDMARK_DARK_COLOR)
-	draw_circle(center + Vector2(0, 13), 13.0, Color(0.0, 0.0, 0.0, 0.25))
-	draw_circle(center + Vector2(0, 4), 12.0, dark)
-	draw_circle(center + Vector2(0, -8), 10.0, body)
-	draw_colored_polygon(PackedVector2Array([center + Vector2(-9, -13), center + Vector2(-14, -22), center + Vector2(-3, -17)]), dark)
-	draw_colored_polygon(PackedVector2Array([center + Vector2(9, -13), center + Vector2(14, -22), center + Vector2(3, -17)]), dark)
-	draw_circle(center + Vector2(-4, -9), 2.2, Color("#1f2937"))
-	draw_circle(center + Vector2(4, -9), 2.2, Color("#1f2937"))
-	draw_circle(center + Vector2(-3.5, -9.5), 0.8, Color("#f8fafc"))
-	draw_circle(center + Vector2(4.5, -9.5), 0.8, Color("#f8fafc"))
-	draw_line(center + Vector2(-5, 1), center + Vector2(5, 1), Color("#374151"), 2.0, true)
+func _draw_wild_landmark(center: Vector2, monster_level := Config.WILD_MONSTER_LEVEL_ONE) -> void:
+	var outline := Color("#111827")
+	var fur := Color("#9ca3af")
+	var fur_dark := Color("#4b5563")
+	var muzzle := Color("#e5e7eb")
+	var eye_color := Color("#111827")
+	# Geometric wolf totem: a compact, front-facing emblem with carved planes.
+	var silhouette := PackedVector2Array([
+		center + Vector2(-17.0, 11.0), center + Vector2(-19.0, -5.0),
+		center + Vector2(-14.0, -13.0), center + Vector2(-16.0, -28.0),
+		center + Vector2(-4.0, -21.0), center + Vector2(0.0, -25.0),
+		center + Vector2(4.0, -21.0), center + Vector2(16.0, -28.0),
+		center + Vector2(14.0, -13.0), center + Vector2(19.0, -5.0),
+		center + Vector2(17.0, 11.0), center + Vector2(8.0, 19.0),
+		center + Vector2(0.0, 23.0), center + Vector2(-8.0, 19.0)
+	])
+	draw_colored_polygon(silhouette, fur)
+	draw_polyline(PackedVector2Array([
+		silhouette[0], silhouette[1], silhouette[2], silhouette[3], silhouette[4],
+		silhouette[5], silhouette[6], silhouette[7], silhouette[8], silhouette[9],
+		silhouette[10], silhouette[11], silhouette[12], silhouette[13], silhouette[0]
+	]), outline, 2.8, true)
+	# Dark ear interiors and cheek planes create the carved totem silhouette.
+	draw_colored_polygon(PackedVector2Array([
+		center + Vector2(-14.0, -14.0), center + Vector2(-16.0, -28.0),
+		center + Vector2(-4.0, -21.0), center + Vector2(-8.0, -10.0)
+	]), fur_dark)
+	draw_colored_polygon(PackedVector2Array([
+		center + Vector2(14.0, -14.0), center + Vector2(16.0, -28.0),
+		center + Vector2(4.0, -21.0), center + Vector2(8.0, -10.0)
+	]), fur_dark)
+	draw_colored_polygon(PackedVector2Array([
+		center + Vector2(-17.0, 5.0), center + Vector2(-8.0, -3.0),
+		center + Vector2(-7.0, 14.0), center + Vector2(-12.0, 17.0)
+	]), fur_dark)
+	draw_colored_polygon(PackedVector2Array([
+		center + Vector2(17.0, 5.0), center + Vector2(8.0, -3.0),
+		center + Vector2(7.0, 14.0), center + Vector2(12.0, 17.0)
+	]), fur_dark)
+	# Central forehead ridge and slanted eyes give the emblem an aggressive expression.
+	draw_colored_polygon(PackedVector2Array([
+		center + Vector2(0.0, -21.0), center + Vector2(-5.0, -8.0),
+		center + Vector2(0.0, -3.0), center + Vector2(5.0, -8.0)
+	]), Color("#d1d5db"))
+	draw_colored_polygon(PackedVector2Array([
+		center + Vector2(-12.0, -7.0), center + Vector2(-3.0, -10.0),
+		center + Vector2(-5.0, -4.0), center + Vector2(-12.0, -3.0)
+	]), outline)
+	draw_colored_polygon(PackedVector2Array([
+		center + Vector2(12.0, -7.0), center + Vector2(3.0, -10.0),
+		center + Vector2(5.0, -4.0), center + Vector2(12.0, -3.0)
+	]), outline)
+	draw_circle(center + Vector2(-7.0, -6.0), 1.8, eye_color)
+	draw_circle(center + Vector2(7.0, -6.0), 1.8, eye_color)
+	# Angular muzzle, nose and fangs finish the wolf-totem mark.
+	draw_colored_polygon(PackedVector2Array([
+		center + Vector2(-8.0, 1.0), center + Vector2(0.0, -3.0),
+		center + Vector2(8.0, 1.0), center + Vector2(5.0, 14.0),
+		center + Vector2(0.0, 21.0), center + Vector2(-5.0, 14.0)
+	]), muzzle)
+	draw_colored_polygon(PackedVector2Array([
+		center + Vector2(-4.0, 1.0), center + Vector2(4.0, 1.0), center + Vector2(0.0, 6.0)
+	]), outline)
+	draw_line(center + Vector2(-5.0, 9.0), center + Vector2(0.0, 12.0), outline, 1.6, true)
+	draw_line(center + Vector2(5.0, 9.0), center + Vector2(0.0, 12.0), outline, 1.6, true)
+	draw_colored_polygon(PackedVector2Array([
+		center + Vector2(-7.0, 9.0), center + Vector2(-4.0, 9.0), center + Vector2(-5.5, 16.0)
+	]), Color("#ffffff"))
+	draw_colored_polygon(PackedVector2Array([
+		center + Vector2(4.0, 9.0), center + Vector2(7.0, 9.0), center + Vector2(5.5, 16.0)
+	]), Color("#ffffff"))
+	var level := clampi(monster_level, Config.WILD_MONSTER_LEVEL_ONE, Config.WILD_MONSTER_LEVEL_THREE)
+	var level_center := center + Vector2(17.0, -21.0)
+	draw_circle(level_center + Vector2(1.0, 1.0), 8.0, Color(0.0, 0.0, 0.0, 0.48))
+	draw_circle(level_center, 7.0, Color("#facc15"))
+	draw_string(ThemeDB.fallback_font, level_center + Vector2(-3.0, 3.5), str(level), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("#111827"))
+
+func _roll_visible_monster_level() -> int:
+	var roll := randf()
+	if roll < Config.WILD_MONSTER_VISIBLE_LEVEL_ONE_WEIGHT:
+		return Config.WILD_MONSTER_LEVEL_ONE
+	if roll < Config.WILD_MONSTER_VISIBLE_LEVEL_ONE_WEIGHT + Config.WILD_MONSTER_VISIBLE_LEVEL_TWO_WEIGHT:
+		return Config.WILD_MONSTER_LEVEL_TWO
+	return Config.WILD_MONSTER_LEVEL_THREE
 
 func _draw_fate_crystal_ball_landmark(center: Vector2) -> void:
-	var base_center := center + Vector2(0.0, 15.0)
-	var ball_center := center + Vector2(0.0, -4.0)
-	# Dark pedestal and a soft shadow make the landmark readable at a distance.
-	_draw_ellipse(base_center + Vector2(0.0, 5.0), Vector2(19.0, 5.5), Color(0.0, 0.0, 0.0, 0.28))
+	var outline := Color("#0b1220")
+	var glass := Color("#d1d5db")
+	var glass_dark := Color("#6b7280")
+	var highlight := Color("#f9fafb")
+	var ball_center := center + Vector2(0.0, -1.0)
+	var cloth := Color("#6b7280")
+	var cloth_dark := Color("#374151")
+	var cloth_trim := Color("#9ca3af")
+	# A compact crystal ball sits on a draped velvet cloth stand.
+	_draw_ellipse(ball_center + Vector2(0.0, 22.0), Vector2(19.0, 4.0), Color(0.0, 0.0, 0.0, 0.28))
 	draw_colored_polygon(PackedVector2Array([
-		base_center + Vector2(-15.0, 0.0), base_center + Vector2(15.0, 0.0),
-		base_center + Vector2(11.0, 8.0), base_center + Vector2(-11.0, 8.0)
-	]), Color("#312e81"))
-	draw_line(base_center + Vector2(-11.0, 1.0), base_center + Vector2(11.0, 1.0), Color("#a5b4fc"), 2.0, true)
-	draw_circle(ball_center + Vector2(2.0, 3.0), 18.0, Color(0.03, 0.02, 0.12, 0.32))
-	draw_circle(ball_center, 18.0, Color(0.24, 0.42, 0.82, 0.78))
-	draw_circle(ball_center + Vector2(-5.0, -6.0), 5.0, Color(0.80, 0.91, 1.0, 0.74))
-	draw_arc(ball_center, 11.0, -2.4, 0.8, 18, Color("#ddd6fe"), 2.0, true)
-	draw_circle(ball_center + Vector2(6.0, 5.0), 1.8, Color("#fef08a"))
-	draw_circle(ball_center + Vector2(-4.0, 6.0), 1.4, Color("#f5d0fe"))
-	draw_circle(ball_center + Vector2(2.0, -1.0), 1.2, Color("#ffffff"))
-	draw_arc(ball_center, 18.0, 0.0, TAU, 32, Color("#c4b5fd"), 2.0, true)
-
-func _draw_level_two_city_landmark(center: Vector2) -> void:
-	var body := Color(Config.VISIBLE_LANDMARK_COLOR)
-	var dark := Color(Config.VISIBLE_LANDMARK_DARK_COLOR)
-	_draw_ellipse(center + Vector2(0, 14), Vector2(19, 5), Color(0.0, 0.0, 0.0, 0.25))
-	draw_rect(Rect2(center + Vector2(-15, -4), Vector2(30, 20)), dark, true)
-	draw_rect(Rect2(center + Vector2(-11, -12), Vector2(8, 28)), body, true)
-	draw_rect(Rect2(center + Vector2(3, -12), Vector2(8, 28)), body, true)
-	draw_colored_polygon(PackedVector2Array([center + Vector2(-15, -13), center + Vector2(-7, -21), center + Vector2(-3, -13)]), body.lightened(0.12))
-	draw_colored_polygon(PackedVector2Array([center + Vector2(3, -13), center + Vector2(7, -21), center + Vector2(11, -13)]), body.lightened(0.12))
-	draw_rect(Rect2(center + Vector2(-3, 8), Vector2(6, 8)), Color("#374151"), true)
-	draw_string(ThemeDB.fallback_font, center + Vector2(-4, 5), "2", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("#1f2937"))
+		center + Vector2(-13.0, 10.0), center + Vector2(0.0, 10.0),
+		center + Vector2(-4.0, 24.0), center + Vector2(-12.0, 21.0)
+	]), cloth_dark)
+	draw_colored_polygon(PackedVector2Array([
+		center + Vector2(-5.0, 10.0), center + Vector2(5.0, 10.0),
+		center + Vector2(10.0, 23.0), center + Vector2(0.0, 21.0)
+	]), cloth)
+	draw_colored_polygon(PackedVector2Array([
+		center + Vector2(0.0, 10.0), center + Vector2(13.0, 10.0),
+		center + Vector2(12.0, 21.0), center + Vector2(4.0, 24.0)
+	]), cloth_dark)
+	draw_polyline(PackedVector2Array([
+		center + Vector2(-13.0, 10.0), center + Vector2(13.0, 10.0),
+		center + Vector2(12.0, 21.0)
+	]), outline, 2.0, true)
+	draw_line(center + Vector2(-11.0, 12.0), center + Vector2(11.0, 12.0), cloth_trim, 2.0, true)
+	draw_circle(ball_center + Vector2(1.5, 2.0), 17.0, outline)
+	draw_circle(ball_center, 14.5, glass_dark)
+	draw_circle(ball_center + Vector2(-2.0, -2.0), 12.0, glass)
+	draw_arc(ball_center + Vector2(1.0, 1.0), 8.0, -2.55, 0.75, 16, highlight, 2.2, true)
+	draw_circle(ball_center + Vector2(-5.0, -6.0), 3.0, Color(0.93, 0.95, 1.0, 0.85))
+	draw_circle(ball_center + Vector2(5.0, 4.0), 1.8, Color("#f9fafb"))
 
 func _draw_mine_landmark(center: Vector2) -> void:
-	var body := Color(Config.VISIBLE_LANDMARK_COLOR)
-	var dark := Color(Config.VISIBLE_LANDMARK_DARK_COLOR)
-	_draw_ellipse(center + Vector2(0, 14), Vector2(19, 5), Color(0.0, 0.0, 0.0, 0.25))
-	# Use simple triangles so the renderer never has to triangulate a concave
-	# polygon for the two mountain peaks.
-	draw_colored_polygon(PackedVector2Array([center + Vector2(-18, 10), center + Vector2(-8, -9), center + Vector2(0, 7)]), dark)
-	draw_colored_polygon(PackedVector2Array([center + Vector2(0, 7), center + Vector2(8, -17), center + Vector2(18, 10)]), dark)
-	draw_colored_polygon(PackedVector2Array([center + Vector2(-8, -9), center + Vector2(8, -17), center + Vector2(3, 8)]), body)
-	draw_colored_polygon(PackedVector2Array([center + Vector2(-4, 7), center + Vector2(0, -5), center + Vector2(5, 8)]), Color("#e5e7eb"))
-
-func _draw_merchant_landmark(center: Vector2) -> void:
-	var cloak := Color("#8b5cf6")
-	var trim := Color("#fbbf24")
-	_draw_ellipse(center + Vector2(0.0, 14.0), Vector2(19.0, 5.0), Color(0.0, 0.0, 0.0, 0.25))
-	draw_circle(center + Vector2(0.0, -7.0), 8.0, Color("#f3c6a5"))
+	var outline := Color("#0b1220")
+	var gold := Color("#d1d5db")
+	var gold_dark := Color("#6b7280")
+	var shine := Color("#f9fafb")
+	var body := PackedVector2Array([
+		center + Vector2(-16.0, 8.0), center + Vector2(-12.0, -6.0),
+		center + Vector2(-3.0, -14.0), center + Vector2(10.0, -8.0),
+		center + Vector2(16.0, 7.0), center + Vector2(6.0, 15.0),
+		center + Vector2(-8.0, 14.0)
+	])
+	# A compact outlined gold ore icon replaces the larger mountain model.
+	draw_colored_polygon(body, gold)
 	draw_colored_polygon(PackedVector2Array([
-		center + Vector2(-13.0, 14.0), center + Vector2(-9.0, -2.0),
-		center + Vector2(9.0, -2.0), center + Vector2(13.0, 14.0)
-	]), cloak)
-	draw_line(center + Vector2(-10.0, 2.0), center + Vector2(10.0, 2.0), trim, 3.0, true)
-	draw_circle(center + Vector2(-3.0, -8.0), 1.4, Color("#172033"))
-	draw_circle(center + Vector2(3.0, -8.0), 1.4, Color("#172033"))
-	draw_line(center + Vector2(-3.0, -3.0), center + Vector2(3.0, -3.0), Color("#7c2d12"), 1.5, true)
-	draw_line(center + Vector2(12.0, 2.0), center + Vector2(18.0, -11.0), trim, 2.5, true)
-	draw_circle(center + Vector2(18.0, -11.0), 3.5, Color("#f59e0b"))
+		center + Vector2(-12.0, -4.0), center + Vector2(-3.0, -14.0),
+		center + Vector2(2.0, 0.0), center + Vector2(-5.0, 7.0)
+	]), shine)
+	draw_colored_polygon(PackedVector2Array([
+		center + Vector2(2.0, 0.0), center + Vector2(10.0, -8.0),
+		center + Vector2(16.0, 7.0), center + Vector2(6.0, 15.0)
+	]), gold_dark)
+	draw_polyline(PackedVector2Array([body[0], body[1], body[2], body[3], body[4], body[5], body[6], body[0]]), outline, 2.5, true)
+	draw_line(center + Vector2(-4.0, -2.0), center + Vector2(5.0, 7.0), outline, 2.0, true)
+	draw_circle(center + Vector2(11.0, -14.0), 3.0, outline)
+	draw_circle(center + Vector2(11.0, -14.0), 1.7, shine)
+
+func _draw_mine_building_model(center: Vector2) -> void:
+	var outline := Color("#111827")
+	var rock := Color("#6b7280")
+	var rock_light := Color("#d1d5db")
+	var rock_dark := Color("#374151")
+	var gold := Color("#f9fafb")
+	_draw_ellipse(center + Vector2(0.0, 16.0), Vector2(21.0, 6.0), Color(0.0, 0.0, 0.0, 0.36))
+	# Layered rock faces keep the opened mine recognizable instead of reading as a coin.
+	var left_face := PackedVector2Array([
+		center + Vector2(-20.0, 10.0), center + Vector2(-11.0, -10.0),
+		center + Vector2(-1.0, 5.0), center + Vector2(-6.0, 16.0)
+	])
+	var right_face := PackedVector2Array([
+		center + Vector2(-1.0, 5.0), center + Vector2(9.0, -16.0),
+		center + Vector2(20.0, 10.0), center + Vector2(-6.0, 16.0)
+	])
+	var center_face := PackedVector2Array([
+		center + Vector2(-11.0, -10.0), center + Vector2(9.0, -16.0),
+		center + Vector2(12.0, 8.0), center + Vector2(-1.0, 16.0),
+		center + Vector2(-6.0, 16.0), center + Vector2(-1.0, 5.0)
+	])
+	draw_colored_polygon(left_face, rock_dark)
+	draw_colored_polygon(right_face, rock)
+	draw_colored_polygon(center_face, rock_light)
+	draw_polyline(PackedVector2Array([left_face[0], left_face[1], left_face[2], left_face[3], left_face[0]]), outline, 2.3, true)
+	draw_polyline(PackedVector2Array([right_face[0], right_face[1], right_face[2], right_face[3], right_face[0]]), outline, 2.3, true)
+	draw_polyline(PackedVector2Array([center_face[0], center_face[1], center_face[2], center_face[3], center_face[4], center_face[5], center_face[0]]), outline, 2.3, true)
+	# Dark cave opening and a few bright gold veins complete the mine silhouette.
+	draw_colored_polygon(PackedVector2Array([
+		center + Vector2(-7.0, 14.0), center + Vector2(-3.0, 5.0),
+		center + Vector2(5.0, 5.0), center + Vector2(9.0, 14.0)
+	]), rock_dark)
+	draw_line(center + Vector2(-5.0, -3.0), center + Vector2(-1.0, 8.0), gold, 2.0, true)
+	draw_line(center + Vector2(3.0, -7.0), center + Vector2(7.0, 3.0), gold, 2.0, true)
+	draw_circle(center + Vector2(12.0, -17.0), 3.0, outline)
+	draw_circle(center + Vector2(12.0, -17.0), 1.6, gold)
+
+func _draw_merchant_landmark(center: Vector2, presenting := false, presentation_progress := 0.0) -> void:
+	_draw_ellipse(center + Vector2(0.0, 14.0), Vector2(19.0, 5.0), Color(0.0, 0.0, 0.0, 0.25))
+	if presenting:
+		_draw_merchant_presented_cards(center, presentation_progress)
+	draw_texture_rect(MERCHANT_ART, Rect2(center + Vector2(-25.0, -33.0), Vector2(50.0, 50.0)), false)
+
+func _draw_merchant_presented_cards(center: Vector2, presentation_progress: float) -> void:
+	var progress := clampf(presentation_progress / Config.MERCHANT_PRESENTATION_DURATION, 0.0, 1.0)
+	var eased := 1.0 - pow(1.0 - progress, 2.0)
+	var card_y := lerpf(-10.0, -42.0, eased)
+	var card_scale := lerpf(0.72, 1.0, eased)
+	var card_offsets := [-22.0, 0.0, 22.0]
+	for index in range(card_offsets.size()):
+		var card_center := center + Vector2(float(card_offsets[index]), card_y - absf(float(index - 1)) * 2.0)
+		_draw_merchant_presented_card(card_center, card_scale, index)
+	# The hands rise with the cards so the animation reads as a world-space action.
+	var hand_lift := lerpf(0.0, -12.0, eased)
+	draw_line(center + Vector2(-9.0, 2.0), center + Vector2(-20.0, -13.0 + hand_lift), Color("#f3c6a5"), 3.0, true)
+	draw_line(center + Vector2(9.0, 2.0), center + Vector2(20.0, -13.0 + hand_lift), Color("#f3c6a5"), 3.0, true)
+	draw_circle(center + Vector2(-20.0, -13.0 + hand_lift), 3.0, Color("#f3c6a5"))
+	draw_circle(center + Vector2(20.0, -13.0 + hand_lift), 3.0, Color("#f3c6a5"))
+
+func _draw_merchant_presented_card(card_center: Vector2, scale: float, index: int) -> void:
+	var card_size := Vector2(13.0, 19.0) * scale
+	var outline := Color("#0b1220")
+	var paper := Color("#f8fafc")
+	var accent: Color = [Color("#f59e0b"), Color("#a78bfa"), Color("#22d3ee")][index]
+	draw_rect(Rect2(card_center - card_size * 0.5 + Vector2(1.0, 1.5), card_size), outline, true)
+	draw_rect(Rect2(card_center - card_size * 0.5, card_size), paper, true)
+	draw_rect(Rect2(card_center - card_size * 0.5, card_size), outline, false, maxf(1.0, 1.5 * scale))
+	draw_circle(card_center, 3.2 * scale, accent)
+	draw_string(ThemeDB.fallback_font, card_center + Vector2(-2.5, 2.8) * scale, "?", HORIZONTAL_ALIGNMENT_LEFT, -1, int(8.0 * scale), outline)
 
 func _draw_ground_item_icon(center: Vector2, item_id: String) -> void:
 	var color := Color("#fbbf24")
@@ -1170,6 +1626,16 @@ func _draw_pickaxe_icon(center: Vector2, scale := 1.0) -> void:
 	draw_line(center + Vector2(3, -10) * scale, center + Vector2(7, -1) * scale, head_color, 4.0 * scale, true)
 	draw_circle(center + Vector2(-8, 9) * scale, 2.0 * scale, Color("#a16207"))
 
+func _draw_coin_icon(center: Vector2, scale := 1.0) -> void:
+	var outline := Color("#0b1220")
+	var gold := Color("#facc15")
+	var shine := Color("#fde68a")
+	draw_circle(center + Vector2(1.5, 2.0) * scale, 11.0 * scale, outline)
+	draw_circle(center, 9.0 * scale, gold)
+	draw_circle(center + Vector2(-2.0, -2.0) * scale, 5.5 * scale, shine)
+	draw_arc(center, 9.0 * scale, 0.0, TAU, 20, Color("#a16207"), maxf(1.0, 1.6 * scale), true)
+	draw_string(ThemeDB.fallback_font, center + Vector2(-3.0, 4.0) * scale, "金", HORIZONTAL_ALIGNMENT_LEFT, -1, int(8.0 * scale), Color("#a16207"))
+
 func _is_in_barracks_range(cell: Vector2i) -> bool:
 	if not tiles.has(barracks_range_cell) or cell == barracks_range_cell:
 		return false
@@ -1197,6 +1663,9 @@ func _draw_building(cell: Vector2i, center: Vector2, building: int, level: int, 
 		if hq_destroyed:
 			_draw_destroyed_hq(center, hq_color)
 			return
+		var hq_dark := hq_color.darkened(0.42)
+		_draw_ellipse(center + Vector2(0.0, 17.0), Vector2(26.0, 7.0), Color(0.0, 0.0, 0.0, 0.38))
+		draw_rect(Rect2(center + Vector2(-15.0, -1.0), Vector2(30.0, 20.0)), hq_dark, true)
 		draw_circle(center, 19.0, Color(hq_color, 0.25))
 		# Castle base and roof.
 		draw_rect(Rect2(center + Vector2(-15, -4), Vector2(30, 20)), hq_color, true)
@@ -1215,18 +1684,25 @@ func _draw_building(cell: Vector2i, center: Vector2, building: int, level: int, 
 		return
 	match building:
 		MINE:
-			var mine_color := _faction_building_color(int(tiles.get(cell, {}).get("owner", UNKNOWN)), Color("#f59e0b"))
-			draw_circle(center, 14.0, mine_color)
-			draw_circle(center, 7.0, mine_color.lightened(0.28))
-			draw_string(ThemeDB.fallback_font, center + Vector2(-5, 4), "$", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, mine_color.darkened(0.45))
+			var tile: Dictionary = tiles.get(cell, {})
+			var is_visible_mine := int(tile.get("tile_type", -1)) == Config.VISIBLE_TILE_TYPE and int(tile.get("visible_tile_result", -1)) == Config.VISIBLE_MINE
+			if is_visible_mine:
+				_draw_visible_landmark_art(center, VISIBLE_GOLD_MINE_ART, 90.0, 0.62)
+			else:
+				_draw_mine_building_model(center)
 		BARRACKS:
 			_draw_barracks_model(center, level, unit_class, false, false, int(tiles.get(cell, {}).get("owner", UNKNOWN)))
 		TOWER:
 			var tower_color := _faction_building_color(int(tiles.get(cell, {}).get("owner", UNKNOWN)), Color("#94a3b8"))
+			_draw_ellipse(center + Vector2(0.0, 15.0), Vector2(19.0, 6.0), Color(0.0, 0.0, 0.0, 0.36))
+			draw_circle(center + Vector2(0.0, 5.0), 14.0, tower_color.darkened(0.42))
 			draw_circle(center, 14.0, tower_color)
-			draw_line(center + Vector2(-4, -4), center + Vector2(13, -18), tower_color.lightened(0.28), 4.0)
+			draw_circle(center + Vector2(-2.0, -3.0), 7.0, tower_color.lightened(0.18))
+			draw_line(center + Vector2(-4, -4), center + Vector2(13, -18), tower_color.lightened(0.36), 4.0)
+			draw_line(center + Vector2(-8.0, -9.0), center + Vector2(1.0, -13.0), tower_color.lightened(0.44), 2.0, true)
 		MERCHANT:
-			_draw_merchant_landmark(center)
+			var presentation_elapsed := float(merchant_presentation_animations.get(cell, -1.0))
+			_draw_merchant_landmark(center, presentation_elapsed >= 0.0, maxf(0.0, presentation_elapsed))
 		STEEL_BARRIER:
 			_draw_steel_barrier(center, _faction_building_color(int(tiles.get(cell, {}).get("owner", UNKNOWN)), Color("#94a3b8")))
 
@@ -1264,7 +1740,7 @@ func _draw_destroyed_hq(center: Vector2, faction_color: Color) -> void:
 func _draw_steel_barrier(center: Vector2, color: Color) -> void:
 	var dark := color.darkened(0.45)
 	var light := color.lightened(0.28)
-	_draw_ellipse(center + Vector2(0.0, 13.0), Vector2(21.0, 5.0), Color(0.0, 0.0, 0.0, 0.30))
+	_draw_ellipse(center + Vector2(0.0, 15.0), Vector2(23.0, 6.0), Color(0.0, 0.0, 0.0, 0.38))
 	draw_rect(Rect2(center + Vector2(-20.0, -10.0), Vector2(40.0, 22.0)), dark, true)
 	draw_colored_polygon(PackedVector2Array([
 		center + Vector2(-17.0, -14.0), center + Vector2(17.0, -14.0),
@@ -1302,6 +1778,53 @@ func _draw_barracks_model(center: Vector2, level: int, unit_class: int, can_merg
 	var accent_color := Color(Config.BARRACKS_LEVEL_ACCENT_COLORS[tier - 1]) if neutral else base_color.lightened(0.20 + 0.06 * float(tier - 1))
 	var trim_color := accent_color.lightened(0.10)
 	var model_center := center + Vector2(0.0, Config.BARRACKS_MODEL_LIFT)
+	# Use the supplied profession artwork when available. The complete
+	# procedural model below remains intact as the fallback renderer.
+	if _has_barracks_art(unit_class, faction):
+		if can_merge:
+			var art_pulse := 0.5 + 0.5 * sin(mergeable_effect_elapsed * 5.0)
+			draw_circle(model_center + Vector2(0.0, -5.0), 27.0 * scale, Color(1.0, 0.78, 0.22, 0.045 + art_pulse * 0.035))
+			draw_arc(model_center + Vector2(0.0, -5.0), 25.0 * scale, -PI * 0.5, TAU - PI * 0.5, 32, Color(1.0, 0.78, 0.22, 0.30 + art_pulse * 0.30), 2.0, true)
+		_draw_ellipse(model_center + Vector2(0.0, 17.0 * scale), Vector2(22.0, 5.0) * scale, Color(0.0, 0.0, 0.0, 0.30))
+		_draw_barracks_art_model(model_center, scale, unit_class, faction)
+		_draw_barracks_level_badge(model_center, scale, tier, accent_color, trim_color)
+		return
+	# High-contrast plinth separates the building from similarly colored candy
+	# tiles. The dark rim and offset shadow establish a readable 2.5D footprint.
+	var plinth := PackedVector2Array([
+		model_center + Vector2(-30.0, 10.0) * scale,
+		model_center + Vector2(-18.0, 20.0) * scale,
+		model_center + Vector2(18.0, 20.0) * scale,
+		model_center + Vector2(30.0, 10.0) * scale,
+		model_center + Vector2(18.0, 2.0) * scale,
+		model_center + Vector2(-18.0, 2.0) * scale
+	])
+	draw_colored_polygon(plinth, Color("#172033"))
+	draw_polyline(PackedVector2Array([plinth[0], plinth[1], plinth[2], plinth[3], plinth[0]]), Color("#0b1220"), maxf(2.0, 3.0 * scale), true)
+	var plinth_top := PackedVector2Array([
+		model_center + Vector2(-25.0, 7.0) * scale,
+		model_center + Vector2(-14.0, 14.0) * scale,
+		model_center + Vector2(14.0, 14.0) * scale,
+		model_center + Vector2(25.0, 7.0) * scale,
+		model_center + Vector2(14.0, 1.0) * scale,
+		model_center + Vector2(-14.0, 1.0) * scale
+	])
+	draw_colored_polygon(plinth_top, Color("#334155"))
+	draw_polyline(PackedVector2Array([plinth_top[0], plinth_top[1], plinth_top[2], plinth_top[3], plinth_top[0]]), Color("#f8fafc", 0.72), maxf(1.5, 2.0 * scale), true)
+	# A raised faction pennant gives the small model a vertical recognition cue.
+	var pennant_x := model_center.x + 22.0 * scale
+	var pennant_top := model_center.y - 38.0 * scale
+	draw_line(Vector2(pennant_x, pennant_top), Vector2(pennant_x, model_center.y + 3.0 * scale), Color("#3b2418"), maxf(2.0, 3.0 * scale), true)
+	draw_colored_polygon(PackedVector2Array([
+		Vector2(pennant_x, pennant_top + 2.0 * scale),
+		Vector2(pennant_x + 17.0 * scale, pennant_top + 7.0 * scale),
+		Vector2(pennant_x, pennant_top + 14.0 * scale)
+	]), accent_color)
+	draw_polyline(PackedVector2Array([
+		Vector2(pennant_x, pennant_top + 2.0 * scale),
+		Vector2(pennant_x + 17.0 * scale, pennant_top + 7.0 * scale),
+		Vector2(pennant_x, pennant_top + 14.0 * scale)
+	]), Color("#172033"), maxf(1.0, 1.5 * scale), true)
 
 	if can_merge:
 		var pulse := 0.5 + 0.5 * sin(mergeable_effect_elapsed * 5.0)
@@ -1323,15 +1846,49 @@ func _draw_barracks_model(center: Vector2, level: int, unit_class: int, can_merg
 	draw_circle(model_center + Vector2(0.0, 11.0 * scale), 4.0 * scale, Color(0.0, 0.0, 0.0, 0.28))
 	draw_circle(model_center + Vector2(0.0, 9.0 * scale), 3.0 * scale, trim_color)
 	# A separate badge makes the building tier readable at a glance.
-	var level_badge_center := model_center + Vector2(18.0, -31.0) * scale
+	var level_badge_center := model_center + Vector2(19.0, 14.0) * scale
 	draw_circle(level_badge_center, 8.0 * scale, Color("#172033"))
 	draw_circle(level_badge_center, 6.0 * scale, accent_color)
 	draw_string(ThemeDB.fallback_font, level_badge_center + Vector2(-3.2 * scale, 3.5 * scale), str(tier), HORIZONTAL_ALIGNMENT_LEFT, -1, int(10.0 * scale), Color("#172033"))
-	var race_badge_center := model_center + Vector2(-18.0, -31.0) * scale
-	var race_color := Config.get_unit_class_race_color(unit_class)
-	draw_circle(race_badge_center, 8.0 * scale, Color("#172033"))
-	draw_circle(race_badge_center, 6.0 * scale, race_color)
-	draw_string(ThemeDB.fallback_font, race_badge_center + Vector2(-3.2 * scale, 3.5 * scale), Config.get_unit_class_race_short_name(unit_class), HORIZONTAL_ALIGNMENT_LEFT, -1, int(9.0 * scale), Color("#172033"))
+
+func _barracks_art_for_faction(faction: int) -> Texture2D:
+	match faction:
+		Config.FACTION_PLAYER:
+			return BARRACKS_ART_PLAYER
+		Config.FACTION_RED:
+			return BARRACKS_ART_RED
+		Config.FACTION_PURPLE:
+			return BARRACKS_ART_PURPLE
+		Config.FACTION_GREEN:
+			return BARRACKS_ART_GREEN
+	return null
+
+func _has_barracks_art(unit_class: int, faction: int) -> bool:
+	return _barracks_art_for_faction(faction) != null and unit_class >= 0 and unit_class < BARRACKS_ART_REGIONS.size()
+
+func _draw_barracks_art_model(center: Vector2, scale: float, unit_class: int, faction: int) -> void:
+	var barracks_art := _barracks_art_for_faction(faction)
+	if barracks_art == null:
+		return
+	var source_region: Rect2 = BARRACKS_ART_REGIONS[clampi(unit_class, 0, BARRACKS_ART_REGIONS.size() - 1)]
+	var width := Config.BARRACKS_ART_BASE_WIDTH * Config.BARRACKS_ART_DISPLAY_SCALE * scale
+	var height := width * source_region.size.y / maxf(1.0, source_region.size.x)
+	var bottom := center + Vector2(0.0, 18.0 * scale)
+	var destination := Rect2(
+		Vector2(bottom.x - width * 0.5, bottom.y - height),
+		Vector2(width, height)
+	)
+	draw_texture_rect_region(barracks_art, destination, source_region, Color.WHITE, false, true)
+
+func _draw_barracks_level_badge(center: Vector2, scale: float, tier: int, accent_color: Color, trim_color: Color) -> void:
+	# Keep the existing level marker and faction-colored upgrade feedback on
+	# top of the new profession artwork.
+	draw_circle(center + Vector2(0.0, 11.0 * scale), 4.0 * scale, Color(0.0, 0.0, 0.0, 0.28))
+	draw_circle(center + Vector2(0.0, 9.0 * scale), 3.0 * scale, trim_color)
+	var level_badge_center := center + Vector2(19.0, 14.0) * scale
+	draw_circle(level_badge_center, 8.0 * scale, Color("#172033"))
+	draw_circle(level_badge_center, 6.0 * scale, accent_color)
+	draw_string(ThemeDB.fallback_font, level_badge_center + Vector2(-3.2 * scale, 3.5 * scale), str(tier), HORIZONTAL_ALIGNMENT_LEFT, -1, int(10.0 * scale), Color("#172033"))
 
 func _draw_barracks_class_signature(center: Vector2, scale: float, unit_class: int, base: Color, dark: Color, light: Color, accent: Color) -> void:
 	# Each profession gets a different structural silhouette. The colors still

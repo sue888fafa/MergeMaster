@@ -1,6 +1,7 @@
 extends Node2D
 
 const Config := preload("res://game_config.gd")
+const Art := preload("res://art_theme.gd")
 const EquipmentDataScript := preload("res://equipment_data.gd")
 const MerchantDataScript := preload("res://merchant_data.gd")
 
@@ -17,6 +18,7 @@ const STEEL_BARRIER := 5
 const BARRACKS_COST := 50
 const MAX_BARRACKS_LEVEL := 4
 const UnitScript := preload("res://unit.gd")
+const UnitVisualLayerScript := preload("res://unit_visual_layer.gd")
 const BulletScript := preload("res://bullet.gd")
 const MeleeAttackEffectScript := preload("res://melee_attack_effect.gd")
 const FateEventScript := preload("res://fate_event.gd")
@@ -28,6 +30,8 @@ const BarracksUpgradeEffectScript := preload("res://barracks_upgrade_effect.gd")
 const IntelligenceBuildingDropEffectScript := preload("res://intelligence_building_drop_effect.gd")
 const GoldPopupEffectScript := preload("res://gold_popup_effect.gd")
 const QuestionCardEffectScript := preload("res://question_card_effect.gd")
+const DragonCardEffectScript := preload("res://dragon_card_effect.gd")
+const BlizzardCardEffectScript := preload("res://blizzard_card_effect.gd")
 const INVALID_CELL := Vector2i(999, 999)
 
 @onready var board: HexBoard = $HexBoard
@@ -142,6 +146,8 @@ var bullet_pool: Array[Node2D] = []
 var melee_effect_pool: Array[MeleeAttackEffect] = []
 var monster_attack_effect_pool: Array[MonsterAttackEffect] = []
 var fate_locked_cells: Dictionary = {}
+var event_presentation_lock_count := 0
+var event_presentation_lock_until := 0.0
 var pending_reveals: Dictionary = {}
 var fate_reveal_batches: Dictionary = {}
 var fate_bomb_building_targets: Dictionary = {}
@@ -174,6 +180,7 @@ var last_hud_faction_scores := ""
 var last_hud_faction_armies := ""
 
 func _ready() -> void:
+	RenderingServer.set_default_clear_color(Art.SKY_LIGHT)
 	rng.randomize()
 	_reset_hq_states()
 	board.tile_clicked.connect(_on_tile_clicked)
@@ -300,6 +307,9 @@ func _refresh_faction_equipment_effects(owner: int) -> void:
 func get_barracks_production_interval(owner: int) -> float:
 	return Config.BARRACKS_PRODUCTION_INTERVAL * maxf(0.01, 1.0 - _get_faction_equipment_bonus(owner, "summon_speed"))
 
+func get_mine_income_progress() -> float:
+	return clampf(mine_income_timer / maxf(0.01, Config.MINE_INCOME_INTERVAL), 0.0, 1.0)
+
 func get_building_max_hp(owner: int, building: int) -> float:
 	var base := 0.0
 	match building:
@@ -357,6 +367,9 @@ func _process(delta: float) -> void:
 	_process_bombardment()
 	if merchant_shop_cell != INVALID_CELL:
 		if not board.has_cell(merchant_shop_cell) or not bool(board.tiles[merchant_shop_cell].get("merchant_active", false)):
+			if board.is_merchant_presenting(merchant_shop_cell):
+				board.stop_merchant_presentation(merchant_shop_cell)
+				_end_event_presentation_lock()
 			merchant_shop_cell = INVALID_CELL
 			hud.hide_merchant_shop()
 			hud.hide_merchant_arrival()
@@ -649,7 +662,7 @@ func _execute_bombardment(area: Array[Vector2i]) -> void:
 	board.set_bombardment_cells(area)
 	var positions: Array[Vector2] = []
 	for cell in area:
-		positions.append(board.axial_to_world(cell))
+		positions.append(board.get_cell_world_center(cell))
 	var effect: BombardmentEffect = BombardmentEffectScript.new()
 	_ensure_dynamic_layer(bombardment_effects, "BombardmentEffects").add_child(effect)
 	effect.setup(positions)
@@ -780,6 +793,8 @@ func restart_game() -> void:
 	_clear_effect_children(upgrade_effects)
 	_clear_effect_children(intelligence_effects)
 	fate_locked_cells.clear()
+	event_presentation_lock_count = 0
+	event_presentation_lock_until = 0.0
 	pending_reveals.clear()
 	fate_reveal_batches.clear()
 	fate_bomb_building_targets.clear()
@@ -860,6 +875,8 @@ func _on_tile_clicked(cell: Vector2i) -> void:
 		_try_use_active_item(cell)
 		return
 	if bool(tile.get("merchant_active", false)) and bool(tile.get("revealed", false)) and int(tile.get("owner", EMPTY)) == PLAYER:
+		if board.is_merchant_presenting(cell):
+			return
 		_open_merchant_shop(cell)
 		return
 	if bool(tile.get("revealed", false)) and int(tile.get("owner", EMPTY)) == PLAYER:
@@ -1149,7 +1166,14 @@ func _apply_tile_result(owner: int, cell: Vector2i, result: Dictionary, trigger_
 	board.tiles[cell]["merchant_active"] = building == MERCHANT
 	board.tiles[cell]["merchant_stock"] = []
 	if bool(result.get("monster", false)):
-		_spawn_monster(cell, int(result.get("monster_level", Config.WILD_MONSTER_LEVEL_ONE)))
+		_spawn_monster(
+			cell,
+			int(result.get("monster_level", Config.WILD_MONSTER_LEVEL_ONE)),
+			bool(result.get("monster_reveal_animation", false)),
+			bool(result.get("visible_monster_art", false))
+		)
+		if owner == PLAYER and bool(result.get("monster_reveal_animation", false)):
+			_lock_event_presentation(Config.WILD_MONSTER_SPAWN_ANIMATION_DURATION + Config.WILD_MONSTER_HEALTH_BAR_APPEAR_DURATION)
 	if _is_combat_building(building):
 		_register_building(owner)
 	if building == BARRACKS:
@@ -1271,6 +1295,7 @@ func _trigger_divination_event(owner: int, fate_cell: Vector2i) -> void:
 	}
 	pending_divinations[fate_cell] = pending
 	if owner == PLAYER and hud != null and hud.has_method("play_divination_event"):
+		_begin_event_presentation_lock()
 		pending["target_name"] = _faction_display_name(target)
 		pending["target_type_name"] = _divination_target_name(target_type)
 		pending["event_name"] = _divination_event_name(event_type)
@@ -1508,6 +1533,8 @@ func _return_from_divination_camera() -> void:
 	divination_tween.tween_callback(_finish_divination_presentation.bind(divination_camera_active["fate_cell"]))
 
 func _finish_divination_presentation(fate_cell: Vector2i) -> void:
+	if pending_divinations.has(fate_cell) and int(pending_divinations[fate_cell].get("owner", AI)) == PLAYER:
+		_end_event_presentation_lock()
 	divination_camera_active.clear()
 	pending_divinations.erase(fate_cell)
 	if hud != null:
@@ -1547,22 +1574,42 @@ func _play_gold_popup(owner: int, amount: int) -> void:
 	var hq_cell: Vector2i = get_hq_cell(owner)
 	var effect: Node2D = GoldPopupEffectScript.new()
 	_ensure_dynamic_layer(fate_effects, "FateEffects").add_child(effect)
-	effect.setup(board.axial_to_world(hq_cell), amount)
+	effect.setup(board.get_cell_surface_anchor(hq_cell), amount)
+
+func _play_dragon_card_effect(cell: Vector2i) -> void:
+	if not board.has_cell(cell):
+		return
+	var effect: Node2D = DragonCardEffectScript.new()
+	_ensure_dynamic_layer(fate_effects, "FateEffects").add_child(effect)
+	effect.setup(board.get_cell_surface_anchor(cell))
+
+func _play_blizzard_card_effect(cell: Vector2i) -> void:
+	if not board.has_cell(cell):
+		return
+	var effect: Node2D = BlizzardCardEffectScript.new()
+	_ensure_dynamic_layer(fate_effects, "FateEffects").add_child(effect)
+	effect.setup(board.get_cell_surface_anchor(cell))
 
 func _trigger_display_only_card_event(owner: int, cell: Vector2i) -> void:
+	if owner == PLAYER:
+		_begin_event_presentation_lock()
 	var card_id := _roll_card_id()
 	var effect: Node2D = QuestionCardEffectScript.new()
 	_ensure_dynamic_layer(fate_effects, "FateEffects").add_child(effect)
-	effect.setup(board.axial_to_world(cell))
+	effect.setup(board.get_cell_surface_anchor(cell))
 	effect.finished.connect(_on_question_card_effect_finished.bind(owner, card_id, cell))
 
 func _on_question_card_effect_finished(owner: int, card_id: String, cell: Vector2i) -> void:
 	if game_over:
+		if owner == PLAYER:
+			_end_event_presentation_lock()
 		return
 	if owner == PLAYER and hud != null and hud.has_method("play_card_draw"):
 		hud.play_card_draw(owner, card_id, cell)
 	else:
 		_grant_card(owner, card_id)
+		if owner == PLAYER:
+			_end_event_presentation_lock()
 		_finish_fate_event(cell)
 
 func _roll_card_id() -> String:
@@ -1660,7 +1707,7 @@ func _start_intelligence_building_drop_animation() -> void:
 	var tile: Dictionary = board.tiles[target]
 	var effect := IntelligenceBuildingDropEffectScript.new()
 	_ensure_dynamic_layer(intelligence_effects, "IntelligenceEffects").add_child(effect)
-	effect.setup(board.axial_to_world(target), int(tile["building"]), int(tile.get("building_level", 1)))
+	effect.setup(board.get_cell_surface_anchor(target), int(tile["building"]), int(tile.get("building_level", 1)))
 
 func _on_intelligence_building_drop_finished(cell: Vector2i) -> void:
 	if pending_intelligence_building_drop.is_empty() or pending_intelligence_building_drop.get("target", INVALID_CELL) != cell:
@@ -1805,21 +1852,27 @@ func _trigger_card_event(owner: int, fate_cell: Vector2i) -> void:
 			_finish_fate_event(fate_cell)
 		return
 	last_message = "随机事件：翻卡中，请等待卡片停止滚动。"
+	_begin_event_presentation_lock()
 	if hud != null and hud.has_method("play_card_event"):
 		hud.play_card_event(owner, card_type, fate_cell)
 	else:
 		if not _apply_card_event(owner, card_type, fate_cell):
 			_finish_fate_event(fate_cell)
+		_end_event_presentation_lock()
 
 func _on_card_event_finished(owner: int, card_type: int, fate_cell: Vector2i) -> void:
 	if card_type == Config.RANDOM_EVENT_DISPLAY_CARD:
 		_finish_fate_event(fate_cell)
 	elif not _apply_card_event(owner, card_type, fate_cell):
 		_finish_fate_event(fate_cell)
+	if owner == PLAYER:
+		_end_event_presentation_lock()
 	board.queue_redraw()
 
 func _on_card_draw_finished(owner: int, card_id: String, fate_cell: Vector2i) -> void:
 	_grant_card(owner, card_id)
+	if owner == PLAYER:
+		_end_event_presentation_lock()
 	_finish_fate_event(fate_cell)
 	_refresh_purchase_cells()
 	board.queue_redraw()
@@ -2146,7 +2199,7 @@ func _start_fate_effect(event_type: int, owner: int, origin: Vector2i, target: V
 		fate_locked_cells[cell] = origin
 	var effect: FateEvent = FateEventScript.new()
 	_ensure_dynamic_layer(fate_effects, "FateEffects").add_child(effect)
-	effect.setup(event_type, board.axial_to_world(origin), board.axial_to_world(target))
+	effect.setup(event_type, board.get_cell_world_center(origin), board.get_cell_world_center(target))
 	effect.finished.connect(_on_fate_effect_finished.bind(effect, event_type, owner, origin, target, locked_cells))
 
 func _on_fate_effect_finished(effect: FateEvent, event_type: int, owner: int, origin: Vector2i, target: Vector2i, locked_cells: Array[Vector2i]) -> void:
@@ -2269,7 +2322,14 @@ func _roll_question_tile_result(_tile: Dictionary) -> Dictionary:
 		return {"building": EMPTY, "level": 0, "unit_class": -1, "random_event": Config.RANDOM_EVENT_DISPLAY_CARD}
 	threshold += Config.QUESTION_WILD_MONSTER_WEIGHT
 	if roll < threshold:
-		return {"building": EMPTY, "level": 0, "unit_class": -1, "monster": true, "monster_level": _roll_question_monster_level()}
+		return {
+			"building": EMPTY,
+			"level": 0,
+			"unit_class": -1,
+			"monster": true,
+			"monster_level": _roll_question_monster_level(),
+			"monster_reveal_animation": true
+		}
 	threshold += Config.QUESTION_CHEST_MONSTER_WEIGHT
 	if roll < threshold:
 		return {"building": EMPTY, "level": 0, "unit_class": -1, "random_event": Config.RANDOM_EVENT_CHEST_MONSTER}
@@ -2291,11 +2351,20 @@ func _roll_question_monster_level() -> int:
 func _roll_visible_tile_result(tile: Dictionary) -> Dictionary:
 	match int(tile.get("visible_tile_result", Config.VISIBLE_FATE)):
 		Config.VISIBLE_WILD_MONSTER:
-			return {"building": EMPTY, "level": 0, "unit_class": -1, "monster": true, "monster_level": _roll_visible_monster_level()}
+			var visible_monster_level := int(tile.get("visible_monster_level", Config.WILD_MONSTER_LEVEL_ONE))
+			if not tile.has("visible_monster_level"):
+				visible_monster_level = _roll_visible_monster_level()
+			return {
+				"building": EMPTY,
+				"level": 0,
+				"unit_class": -1,
+				"monster": true,
+				"monster_level": visible_monster_level,
+				"visible_monster_art": true,
+				"monster_reveal_animation": true
+			}
 		Config.VISIBLE_MINE:
 			return {"building": MINE, "level": 0, "unit_class": -1}
-		Config.VISIBLE_LEVEL_TWO_BARRACKS:
-			return {"building": BARRACKS, "level": 2, "unit_class": _random_unit_class()}
 	return {"building": EMPTY, "level": 0, "unit_class": -1}
 
 func _roll_visible_monster_level() -> int:
@@ -2343,12 +2412,16 @@ func _present_merchant_arrival(cell: Vector2i) -> void:
 		return
 	merchant_shop_cell = cell
 	var stock := _ensure_merchant_stock(cell)
+	_begin_event_presentation_lock()
+	board.start_merchant_presentation(cell)
 	if hud != null:
 		hud.play_merchant_arrival(stock, cell)
 
 func _on_merchant_arrival_finished(cell: Vector2i) -> void:
 	if game_over or not board.has_cell(cell) or not bool(board.tiles[cell].get("merchant_active", false)):
 		return
+	board.stop_merchant_presentation(cell)
+	_end_event_presentation_lock()
 	_open_merchant_shop(cell)
 
 func _on_merchant_item_selected(index: int) -> void:
@@ -2388,6 +2461,9 @@ func _on_merchant_item_selected(index: int) -> void:
 func _dismiss_merchant(cell: Vector2i) -> void:
 	if not board.has_cell(cell):
 		return
+	if board.is_merchant_presenting(cell):
+		_end_event_presentation_lock()
+	board.stop_merchant_presentation(cell)
 	var tile: Dictionary = board.tiles[cell]
 	if int(tile.get("building", EMPTY)) == MERCHANT or bool(tile.get("merchant_active", false)):
 		tile["merchant_active"] = false
@@ -2449,6 +2525,7 @@ func _try_use_active_item(target_cell: Vector2i) -> void:
 		return
 	var used := false
 	var replacement_card_id := ""
+	var stolen_card_id := ""
 	if MerchantDataScript.is_sealed_barracks_card(active_item_id):
 		var sealed_tile: Dictionary = board.tiles[target_cell]
 		if not _is_hq_cell(target_cell) and bool(sealed_tile.get("revealed", false)) and int(sealed_tile.get("owner", EMPTY)) == PLAYER and int(sealed_tile.get("building", EMPTY)) == EMPTY and not bool(sealed_tile.get("monster_active", false)) and str(sealed_tile.get("ground_item_id", "")).is_empty():
@@ -2462,6 +2539,7 @@ func _try_use_active_item(target_cell: Vector2i) -> void:
 		match active_item_id:
 			MerchantDataScript.ITEM_DRAGON:
 				if _is_enemy_building(target_cell, PLAYER):
+					_play_dragon_card_effect(target_cell)
 					board.destroy_building(target_cell)
 					_check_building_result()
 					used = true
@@ -2487,6 +2565,7 @@ func _try_use_active_item(target_cell: Vector2i) -> void:
 				for unit in units:
 					if is_instance_valid(unit) and is_enemy(unit.faction, PLAYER) and board.cube_distance(unit.cell, target_cell) <= Config.MERCHANT_STORM_RADIUS:
 						unit.freeze_for(Config.MERCHANT_STORM_DURATION)
+				_play_blizzard_card_effect(target_cell)
 				used = true
 			MerchantDataScript.ITEM_TRANSFER_CERTIFICATE:
 				if _is_enemy_building(target_cell, PLAYER) and int(board.tiles[target_cell].get("building", EMPTY)) == BARRACKS:
@@ -2511,24 +2590,66 @@ func _try_use_active_item(target_cell: Vector2i) -> void:
 			MerchantDataScript.ITEM_RECYCLE:
 				replacement_card_id = _seal_barracks_with_recycle_card(target_cell)
 				used = not replacement_card_id.is_empty()
+			MerchantDataScript.ITEM_STEAL:
+				stolen_card_id = _steal_card_from_faction(target_cell, active_item_id if inventory_item else "")
+				used = not stolen_card_id.is_empty()
 	if used:
 		var used_name := MerchantDataScript.get_item_name(active_item_id)
 		if inventory_item:
 			item_inventory.erase(active_item_id)
 			if not replacement_card_id.is_empty() and item_inventory.size() < 8:
 				item_inventory.append(replacement_card_id)
-			hud.set_item_inventory(item_inventory)
 		else:
 			board.tiles[active_item_cell]["ground_item_id"] = ""
-		_clear_active_item("已使用卡片：%s。" % used_name)
+		if not stolen_card_id.is_empty():
+			_grant_card(PLAYER, stolen_card_id)
+		hud.set_item_inventory(item_inventory)
+		var result_message := "已使用卡片：%s。" % used_name
+		if not stolen_card_id.is_empty():
+			result_message = "窃取成功：获得%s。" % MerchantDataScript.get_item_name(stolen_card_id)
+		_clear_active_item(result_message)
 		_refresh_purchase_cells()
 		board.queue_redraw()
 	else:
 		if active_item_id == MerchantDataScript.ITEM_RECYCLE:
 			last_message = "回收卡必须拖到一座兵营上使用。"
+		elif active_item_id == MerchantDataScript.ITEM_STEAL:
+			last_message = "该阵营没有可窃取的卡片，窃取失败。"
 		else:
 			last_message = "该卡片无法对这个目标使用。"
 		_update_hud()
+
+func _steal_card_from_faction(target_cell: Vector2i, excluded_card_id := "") -> String:
+	if not board.has_cell(target_cell):
+		return ""
+	var tile: Dictionary = board.tiles[target_cell]
+	if not bool(tile.get("revealed", false)):
+		return ""
+	var target_owner := int(tile.get("owner", EMPTY))
+	if not is_valid_faction(target_owner):
+		return ""
+	var inventory_can_fit := item_inventory.size() < 8 or active_item_cell == INVALID_CELL
+	if not inventory_can_fit:
+		return ""
+	var target_inventory: Array = card_inventories.get(target_owner, [])
+	var candidate_indices: Array[int] = []
+	var excluded_once := false
+	for index in range(target_inventory.size()):
+		var card_id := str(target_inventory[index])
+		if not MerchantDataScript.is_card(card_id):
+			continue
+		if target_owner == PLAYER and not excluded_card_id.is_empty() and card_id == excluded_card_id and not excluded_once:
+			excluded_once = true
+			continue
+		candidate_indices.append(index)
+	if candidate_indices.is_empty():
+		return ""
+	var selected_index := candidate_indices[rng.randi_range(0, candidate_indices.size() - 1)]
+	var stolen_card_id := str(target_inventory[selected_index])
+	target_inventory.remove_at(selected_index)
+	if target_owner == AI:
+		ai_card_inventory = target_inventory
+	return stolen_card_id
 
 func _seal_barracks_with_recycle_card(target_cell: Vector2i) -> String:
 	if not board.has_cell(target_cell) or _is_hq_cell(target_cell):
@@ -2582,7 +2703,20 @@ func _is_adjacent_to_owner(cell: Vector2i, owner: int) -> bool:
 	return false
 
 func _is_reveal_locked(cell: Vector2i) -> bool:
-	return fate_locked_cells.has(cell) or pending_reveals.has(cell) or board.is_tile_reveal_active(cell) or is_bombardment_locked(cell) or _is_card_land_loss_locked(cell)
+	return _is_event_presentation_locked() or fate_locked_cells.has(cell) or pending_reveals.has(cell) or board.is_tile_reveal_active(cell) or is_bombardment_locked(cell) or _is_card_land_loss_locked(cell)
+
+func _begin_event_presentation_lock(duration := Config.EVENT_PRESENTATION_MIN_LOCK_DURATION) -> void:
+	event_presentation_lock_count += 1
+	_lock_event_presentation(duration)
+
+func _end_event_presentation_lock() -> void:
+	event_presentation_lock_count = maxi(0, event_presentation_lock_count - 1)
+
+func _lock_event_presentation(duration: float) -> void:
+	event_presentation_lock_until = maxf(event_presentation_lock_until, elapsed + duration)
+
+func _is_event_presentation_locked() -> bool:
+	return event_presentation_lock_count > 0 or elapsed < event_presentation_lock_until
 
 func _register_building(owner: int) -> void:
 	if is_valid_faction(owner):
@@ -2600,11 +2734,16 @@ func _refresh_purchase_cells() -> void:
 	var candidates: Array[Vector2i] = []
 	for cell in board.tiles:
 		var tile: Dictionary = board.tiles[cell]
-		if bool(tile["revealed"]) or _is_reveal_locked(cell):
+		if bool(tile["revealed"]) or _is_purchase_prompt_locked(cell):
 			continue
 		if _is_adjacent_to_owner(cell, PLAYER):
 			candidates.append(cell)
 	board.set_purchasable_cells(candidates)
+
+func _is_purchase_prompt_locked(cell: Vector2i) -> bool:
+	# Event presentation is a global interaction lock, but it must not hide the
+	# purchase hints. Only tile-specific states suppress the visible prompt.
+	return fate_locked_cells.has(cell) or pending_reveals.has(cell) or board.is_tile_reveal_active(cell) or is_bombardment_locked(cell) or _is_card_land_loss_locked(cell)
 
 func _process_economy(delta: float) -> void:
 	income_timer += delta
@@ -3325,10 +3464,10 @@ func _spawn_initial_barracks_unit(owner: int, cell: Vector2i) -> bool:
 	board.update_build_timer(cell, 0.0 if unit_count >= 1 else get_barracks_production_interval(owner))
 	return unit_count > 0
 
-func _spawn_monster(cell: Vector2i, monster_level: int = Config.WILD_MONSTER_LEVEL_ONE) -> WildMonster:
+func _spawn_monster(cell: Vector2i, monster_level: int = Config.WILD_MONSTER_LEVEL_ONE, show_spawn_animation := false, use_visible_art := false) -> WildMonster:
 	var monster: WildMonster = MonsterScript.new()
 	_ensure_dynamic_layer(units_layer, "Units").add_child(monster)
-	monster.setup(cell, self, int(board.tiles[cell]["owner"]), monster_level)
+	monster.setup(cell, self, int(board.tiles[cell]["owner"]), monster_level, show_spawn_animation, use_visible_art)
 	monsters.append(monster)
 	_add_indexed_monster(monster)
 	board.tiles[cell]["monster_active"] = true
@@ -3375,7 +3514,12 @@ func _play_barracks_upgrade_effect(cell: Vector2i, level: int) -> void:
 		return
 	var effect: Node2D = BarracksUpgradeEffectScript.new()
 	_ensure_dynamic_layer(upgrade_effects, "UpgradeEffects").add_child(effect)
-	effect.setup(board.axial_to_world(cell), level)
+	var unit_class: int = int(board.get_building_unit_class(cell)) if board.has_method("get_building_unit_class") else -1
+	var effect_position := board.get_cell_surface_anchor(cell)
+	if board.has_method("get_building_visual_anchor"):
+		var anchor: Dictionary = board.get_building_visual_anchor(cell, level, unit_class)
+		effect_position = Vector2(anchor["center"])
+	effect.setup(effect_position, level)
 
 func process_monster(monster: WildMonster, _delta: float) -> void:
 	if not is_instance_valid(monster) or not active_monsters.has(monster):
@@ -3425,7 +3569,7 @@ func remove_monster(monster: WildMonster, killer: Node = null) -> void:
 	if is_instance_valid(monster):
 		monster.queue_free()
 	if is_valid_faction(capture_owner) and not eliminated_factions.get(capture_owner, false):
-		_play_equipment_drop(capture_owner, _random_equipment_id(monster.monster_level), board.axial_to_world(defeated_cell))
+		_play_equipment_drop(capture_owner, _random_equipment_id(monster.monster_level), board.get_cell_surface_anchor(defeated_cell))
 	_refresh_purchase_cells()
 	board.queue_redraw()
 
@@ -3546,6 +3690,8 @@ func damage_building(cell: Vector2i, amount: float, attacker_owner := 0) -> void
 
 func remove_unit(unit: BattleUnit) -> void:
 	var home_cell := unit.home_cell if is_instance_valid(unit) else INVALID_CELL
+	if is_instance_valid(unit) and is_instance_valid(units_layer) and units_layer.has_method("play_unit_death"):
+		units_layer.call("play_unit_death", unit)
 	if active_units.has(unit):
 		units.erase(unit)
 	_remove_indexed_unit(unit)
@@ -3724,7 +3870,7 @@ func _ensure_dynamic_layer(current_layer, layer_name: String) -> Node2D:
 		var active_layer := current_layer as Node2D
 		if not active_layer.is_queued_for_deletion():
 			return active_layer
-	var replacement := Node2D.new()
+	var replacement: Node2D = UnitVisualLayerScript.new() if layer_name == "Units" else Node2D.new()
 	replacement.name = layer_name
 	add_child(replacement)
 	match layer_name:
