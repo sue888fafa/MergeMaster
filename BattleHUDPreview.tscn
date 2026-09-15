@@ -1,0 +1,320 @@
+[gd_scene format=3 uid="uid://b5lmcw8mhvlty"]
+
+[ext_resource type="Script" uid="uid://cng2kenaxkiub" path="res://battle_hud_preview.gd" id="1_preview"]
+[ext_resource type="Texture2D" uid="uid://w8wx8aelth52" path="res://assets/generated/ui/coin.png" id="2_2so8l"]
+[ext_resource type="Script" uid="uid://dtejyqm62x45l" path="res://faction_stats_display.gd" id="3_stats"]
+[ext_resource type="Texture2D" uid="uid://o3nogg3enmkl" path="res://assets/generated/ui/castle_info.png" id="4_castle"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_klsug"]
+content_margin_left = 12.0
+content_margin_top = 7.0
+content_margin_right = 12.0
+content_margin_bottom = 7.0
+bg_color = Color(0.3764706, 0.64705884, 0.98039216, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 3
+border_color = Color(0.2, 0.25490198, 0.33333334, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+shadow_size = 1
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_o3a6p"]
+content_margin_left = 12.0
+content_margin_top = 7.0
+content_margin_right = 12.0
+content_margin_bottom = 7.0
+bg_color = Color(0.33129412, 0.56941175, 0.8627451, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.2, 0.25490198, 0.33333334, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_46m16"]
+content_margin_left = 12.0
+content_margin_top = 7.0
+content_margin_right = 12.0
+content_margin_bottom = 7.0
+bg_color = Color(0.43882355, 0.68235296, 0.982353, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.2, 0.25490198, 0.33333334, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_8g80f"]
+content_margin_left = 12.0
+content_margin_top = 7.0
+content_margin_right = 12.0
+content_margin_bottom = 7.0
+bg_color = Color(0.14901961, 0.19607843, 0.26666668, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.2, 0.25490198, 0.33333334, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_et2hf"]
+content_margin_left = 12.0
+content_margin_top = 7.0
+content_margin_right = 12.0
+content_margin_bottom = 7.0
+bg_color = Color(0.41388237, 0.6682353, 0.98156863, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.2, 0.25490198, 0.33333334, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_qjmj8"]
+bg_color = Color(0, 0, 0, 0.45882353)
+corner_radius_top_left = 5
+corner_radius_top_right = 5
+corner_radius_bottom_right = 5
+corner_radius_bottom_left = 5
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_pgth8"]
+bg_color = Color(0.9372549, 0.26666668, 0.26666668, 1)
+border_color = Color(0.94722956, 0.74732316, 0.6957729, 1)
+corner_radius_top_left = 2
+corner_radius_top_right = 2
+corner_radius_bottom_right = 2
+corner_radius_bottom_left = 2
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_huevy"]
+content_margin_left = 18.0
+content_margin_top = 18.0
+content_margin_right = 18.0
+content_margin_bottom = 18.0
+bg_color = Color(0.09019608, 0.1254902, 0.2, 1)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.2, 0.25490198, 0.33333334, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+
+[node name="BattleHUDPreview" type="Control" unique_id=55938226]
+custom_minimum_size = Vector2(720, 1280)
+layout_mode = 3
+anchors_preset = 0
+offset_right = 720.0
+offset_bottom = 1280.0
+mouse_filter = 2
+script = ExtResource("1_preview")
+
+[node name="Backdrop" type="ColorRect" parent="." unique_id=1945197054]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.76862746, 0.9254902, 1, 1)
+
+[node name="GoldIcon" type="TextureRect" parent="." unique_id=1233357742]
+z_index = 1
+layout_mode = 0
+offset_left = 16.0
+offset_top = 14.0
+offset_right = 44.0
+offset_bottom = 42.0
+mouse_filter = 2
+texture = ExtResource("2_2so8l")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="GoldLabel" type="Label" parent="." unique_id=1336117473]
+z_index = 1
+layout_mode = 0
+offset_left = 50.0
+offset_top = 16.0
+offset_right = 168.0
+offset_bottom = 50.0
+theme_override_colors/font_color = Color(0.972549, 0.98039216, 0.9882353, 1)
+theme_override_colors/font_outline_color = Color(0.02, 0.04, 0.08, 0.92)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 18
+text = "  12"
+
+[node name="FpsLabel" type="Label" parent="." unique_id=1246852503]
+layout_mode = 0
+offset_left = 653.0
+offset_top = 73.0
+offset_right = 753.0
+offset_bottom = 97.0
+theme_override_colors/font_color = Color(0.2901961, 0.87058824, 0.5019608, 1)
+theme_override_colors/font_outline_color = Color(0.02, 0.04, 0.08, 0.92)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 14
+text = "FPS 60"
+
+[node name="PlayerInfoButton" type="Button" parent="." unique_id=2095614956]
+layout_mode = 0
+offset_left = 16.0
+offset_top = 78.0
+offset_right = 64.0
+offset_bottom = 126.0
+tooltip_text = "城堡信息"
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.972549, 0.98039216, 0.9882353, 1)
+theme_override_colors/font_pressed_color = Color(0.972549, 0.98039216, 0.9882353, 1)
+theme_override_colors/font_hover_color = Color(0.972549, 0.98039216, 0.9882353, 1)
+theme_override_colors/font_disabled_color = Color(0.79607844, 0.8352941, 0.88235295, 1)
+theme_override_colors/font_outline_color = Color(1, 1, 1, 0)
+theme_override_constants/outline_size = 0
+theme_override_styles/normal = SubResource("StyleBoxFlat_klsug")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_o3a6p")
+theme_override_styles/hover = SubResource("StyleBoxFlat_46m16")
+theme_override_styles/disabled = SubResource("StyleBoxFlat_8g80f")
+theme_override_styles/focus = SubResource("StyleBoxFlat_et2hf")
+text = "
+"
+icon = ExtResource("4_castle")
+expand_icon = true
+
+[node name="HQHealthBar" type="ProgressBar" parent="." unique_id=264372234]
+layout_mode = 0
+offset_left = 149.0
+offset_top = 23.0
+offset_right = 196.0
+offset_bottom = 33.0
+mouse_filter = 2
+theme_override_styles/background = SubResource("StyleBoxFlat_qjmj8")
+theme_override_styles/fill = SubResource("StyleBoxFlat_pgth8")
+value = 100.0
+show_percentage = false
+
+[node name="TimerLabel" type="Label" parent="." unique_id=1687079085]
+layout_mode = 0
+offset_left = 180.0
+offset_top = 63.0
+offset_right = 540.0
+offset_bottom = 105.0
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 22
+text = "08:42"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="FactionStatsDisplay" type="Control" parent="." unique_id=290382848]
+anchors_preset = 0
+offset_left = 496.0
+offset_top = 7.0
+offset_right = 730.0
+offset_bottom = 85.0
+mouse_filter = 2
+script = ExtResource("3_stats")
+
+[node name="StatusLabel" type="Label" parent="." unique_id=290382849]
+layout_mode = 0
+offset_left = 274.0
+offset_top = 14.0
+offset_right = 688.0
+offset_bottom = 48.0
+theme_override_colors/font_color = Color(0.972549, 0.98039216, 0.9882353, 1)
+theme_override_colors/font_outline_color = Color(0.02, 0.04, 0.08, 0.92)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 13
+text = "领地  我:24 红:18 紫:12 绿:09"
+horizontal_alignment = 2
+
+[node name="ArmyLabel" type="Label" parent="." unique_id=290382850]
+layout_mode = 0
+offset_left = 274.0
+offset_top = 45.0
+offset_right = 688.0
+offset_bottom = 71.0
+theme_override_colors/font_color = Color(0.8862745, 0.9098039, 0.9411765, 1)
+theme_override_colors/font_outline_color = Color(0.02, 0.04, 0.08, 0.92)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 13
+text = "士兵  我:12 红:09 紫:07 绿:05"
+horizontal_alignment = 2
+
+[node name="BroadcastPanel" type="Panel" parent="." unique_id=1760018389]
+layout_mode = 0
+offset_left = 80.0
+offset_top = 110.0
+offset_right = 640.0
+offset_bottom = 156.0
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_huevy")
+
+[node name="BroadcastLabel" type="Label" parent="BroadcastPanel" unique_id=2050141693]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_colors/font_color = Color(0.99607843, 0.8862745, 0.8862745, 1)
+theme_override_colors/font_outline_color = Color(0.02, 0.04, 0.08, 0.92)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 19
+text = "红方已淘汰"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="BottomStatusPanel" type="ColorRect" parent="." unique_id=1307528042]
+layout_mode = 0
+offset_left = 16.0
+offset_top = 1202.0
+offset_right = 326.0
+offset_bottom = 1264.0
+mouse_filter = 2
+color = Color(1, 0.96, 0.82, 0.92)
+
+[node name="BottomStatusLabel" type="Label" parent="." unique_id=1104288315]
+layout_mode = 0
+offset_left = 26.0
+offset_top = 1216.0
+offset_right = 316.0
+offset_bottom = 1258.0
+text = "提示：点击己方领地旁的地块购买"
+
+[node name="GoldPanel" type="Panel" parent="." unique_id=1128157298]
+layout_mode = 0
+offset_left = 27.0
+offset_top = 17.0
+offset_right = 113.0
+offset_bottom = 40.0
+
+[node name="CastleLabel" type="Label" parent="." unique_id=1551192490]
+z_index = 1
+layout_mode = 0
+offset_left = 25.0
+offset_top = 112.0
+offset_right = 62.0
+offset_bottom = 132.0
+theme_override_colors/font_color = Color(0.972549, 0.98039216, 0.9882353, 1)
+theme_override_colors/font_outline_color = Color(0.02, 0.04, 0.08, 0.92)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 14
+text = "城堡"

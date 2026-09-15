@@ -1,0 +1,178 @@
+[gd_scene format=3 uid="uid://beaa6fbf2051g"]
+
+[ext_resource type="Script" uid="uid://bwjwroxivjgfx" path="res://divination_house_art.gd" id="1_art"]
+[ext_resource type="Script" uid="uid://canq4wmed0sd" path="res://divination_target_display.gd" id="2_target"]
+
+[sub_resource type="StyleBoxFlat" id="StylePanel"]
+bg_color = Color(0.12, 0.08, 0.24, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.55, 0.42, 0.86, 1)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_right = 12
+corner_radius_bottom_left = 12
+shadow_color = Color(0, 0, 0, 0.35)
+shadow_size = 10
+
+[node name="DivinationUI" type="Control" unique_id=621527939]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="DivinationOverlay" type="ColorRect" parent="." unique_id=1649310167]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.01, 0.02, 0.06, 0.46)
+
+[node name="DivinationHouse" type="Panel" parent="." unique_id=1825582613]
+layout_mode = 0
+offset_right = 620.0
+offset_bottom = 470.0
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StylePanel")
+
+[node name="DivinationHouseArt" type="Control" parent="DivinationHouse" unique_id=252300564]
+anchors_preset = 0
+offset_top = 38.0
+offset_right = 620.0
+offset_bottom = 348.0
+mouse_filter = 2
+script = ExtResource("1_art")
+
+[node name="DivinationTitle" type="Label" parent="DivinationHouse" unique_id=1300689067]
+layout_mode = 0
+offset_left = 24.0
+offset_top = 2.0
+offset_right = 596.0
+offset_bottom = 36.0
+theme_override_colors/font_color = Color(0.96, 0.9, 1, 1)
+theme_override_font_sizes/font_size = 28
+text = "占卜屋"
+horizontal_alignment = 1
+
+[node name="DivinationTarget" type="Label" parent="DivinationHouse" unique_id=1295761938]
+layout_mode = 0
+offset_left = 24.0
+offset_top = 50.0
+offset_right = 596.0
+offset_bottom = 76.0
+theme_override_colors/font_color = Color(0.78, 0.61, 1, 1)
+theme_override_font_sizes/font_size = 18
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="DivinationTargetDisplay" type="Control" parent="DivinationHouse" unique_id=196523055]
+anchors_preset = 0
+offset_left = 388.0
+offset_top = 60.0
+offset_right = 596.0
+offset_bottom = 108.0
+mouse_filter = 2
+script = ExtResource("2_target")
+
+[node name="EventIconCard" type="Label" parent="DivinationHouse" unique_id=745687067]
+layout_mode = 0
+offset_left = 290.0
+offset_top = 105.0
+offset_right = 330.0
+offset_bottom = 145.0
+theme_override_colors/font_color = Color(0.77, 0.71, 0.99, 1)
+theme_override_colors/font_outline_color = Color(0.03, 0.02, 0.1, 0.95)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 26
+text = "卡"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="EventIconBarracks" type="Label" parent="DivinationHouse" unique_id=1439940363]
+layout_mode = 0
+offset_left = 327.0
+offset_top = 146.0
+offset_right = 367.0
+offset_bottom = 186.0
+theme_override_colors/font_color = Color(0.77, 0.71, 0.99, 1)
+theme_override_colors/font_outline_color = Color(0.03, 0.02, 0.1, 0.95)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 26
+text = "营"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="EventIconLoss" type="Label" parent="DivinationHouse" unique_id=970810495]
+layout_mode = 0
+offset_left = 327.0
+offset_top = 189.0
+offset_right = 367.0
+offset_bottom = 229.0
+theme_override_colors/font_color = Color(0.77, 0.71, 0.99, 1)
+theme_override_colors/font_outline_color = Color(0.03, 0.02, 0.1, 0.95)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 26
+text = "损"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="EventIconGold" type="Label" parent="DivinationHouse" unique_id=1074750810]
+layout_mode = 0
+offset_left = 290.0
+offset_top = 231.0
+offset_right = 330.0
+offset_bottom = 271.0
+theme_override_colors/font_color = Color(0.77, 0.71, 0.99, 1)
+theme_override_colors/font_outline_color = Color(0.03, 0.02, 0.1, 0.95)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 26
+text = "金"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="EventIconRise" type="Label" parent="DivinationHouse" unique_id=1606490737]
+layout_mode = 0
+offset_left = 253.0
+offset_top = 189.0
+offset_right = 293.0
+offset_bottom = 229.0
+theme_override_colors/font_color = Color(0.77, 0.71, 0.99, 1)
+theme_override_colors/font_outline_color = Color(0.03, 0.02, 0.1, 0.95)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 26
+text = "升"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="EventIconFall" type="Label" parent="DivinationHouse" unique_id=873207214]
+layout_mode = 0
+offset_left = 253.0
+offset_top = 146.0
+offset_right = 293.0
+offset_bottom = 186.0
+theme_override_colors/font_color = Color(0.77, 0.71, 0.99, 1)
+theme_override_colors/font_outline_color = Color(0.03, 0.02, 0.1, 0.95)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 26
+text = "降"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="DivinationEventLabel" type="Label" parent="DivinationHouse" unique_id=1198082202]
+layout_mode = 0
+offset_left = 24.0
+offset_top = 328.0
+offset_right = 596.0
+offset_bottom = 402.0
+theme_override_colors/font_color = Color(0.78, 0.78, 0.88, 1)
+theme_override_font_sizes/font_size = 19
+horizontal_alignment = 1
+vertical_alignment = 1

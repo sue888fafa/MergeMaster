@@ -3,16 +3,28 @@ extends Control
 
 const Config := preload("res://game_config.gd")
 const MerchantDataScript := preload("res://merchant_data.gd")
+const MerchantCardIconScript := preload("res://merchant_card_icon.gd")
+const CAT_OFFICER_ART := preload("res://assets/generated/companion/cat_officer.png")
 
 signal expanded_changed(expanded: bool)
 signal inventory_item_dropped(item_id: String, screen_position: Vector2)
+signal inventory_item_dragged(item_id: String, screen_position: Vector2)
+signal inventory_item_drag_ended(item_id: String, screen_position: Vector2, was_dragged: bool)
 
 const COMPANION_HEIGHT := 340.0
 const HEAD_RADIUS := 38.0
 const SLOT_SIZE := 62.0
-const SLOT_GAP := 8.0
 const SLOT_TOP := 218.0
+const CARD_BASE_SIZE := SLOT_SIZE * 1.5
+const CARD_MIN_SIZE := 40.0
+const CARD_OVERLAP := 0.30
+const CARD_RIGHT_MARGIN := 12.0
+const CARD_OPEN_DURATION := 0.90
+const CARD_CLOSE_DURATION := 0.52
 const ITEM_HINT_DURATION := 1.8
+const SELECTED_CARD_RISE := 16.0
+const CARD_DEAL_STAGGER := 0.06
+const CARD_TILT_DEGREES := [-5.0, -3.5, -2.0, -0.8, 0.8, 2.0, 3.5, 5.0]
 
 var bubble_message := ""
 var bubble_remaining := 0.0
@@ -25,6 +37,7 @@ var head_button: Button
 var slot_buttons: Array[Button] = []
 var inventory_items: Array[String] = []
 var dragging_item_id := ""
+var dragging_item_index := -1
 var dragging_screen_position := Vector2.ZERO
 var drag_start_screen_position := Vector2.ZERO
 var drag_started := false
@@ -33,11 +46,18 @@ var flying_item_index := -1
 var flying_start_local := Vector2.ZERO
 var flying_progress := 0.0
 var fly_tween: Tween
+var layout_transition_progress := 1.0
+var layout_transition_from_count := 0
+var layout_transition_to_count := 0
+var layout_transition_tween: Tween
+var pending_layout_from_count := -1
 var last_layout_progress := -1.0
+var last_layout_transition_progress := -1.0
 var item_hint_index := -1
 var item_hint_text := ""
 var item_hint_progress := 0.0
 var item_hint_tween: Tween
+var selected_item_index := -1
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -67,6 +87,7 @@ func _hide_item_hint() -> void:
 	item_hint_index = -1
 	item_hint_text = ""
 	item_hint_progress = 0.0
+	selected_item_index = -1
 
 func _show_item_hint(index: int) -> void:
 	if index < 0 or index >= inventory_items.size():
@@ -77,12 +98,12 @@ func _show_item_hint(index: int) -> void:
 		return
 	_hide_item_hint()
 	item_hint_index = index
+	selected_item_index = index
 	item_hint_text = "%s\n%s" % [str(item.get("name", "卡片")), str(item.get("description", ""))]
 	item_hint_progress = 0.0
 	item_hint_tween = create_tween()
 	item_hint_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	item_hint_tween.tween_property(self, "item_hint_progress", 1.0, ITEM_HINT_DURATION)
-	item_hint_tween.finished.connect(_hide_item_hint)
 	queue_redraw()
 
 func toggle_expanded() -> void:
@@ -92,11 +113,13 @@ func set_expanded(expanded: bool) -> void:
 	if is_expanded == expanded and (expand_tween == null or not expand_tween.is_valid()):
 		return
 	is_expanded = expanded
+	if not expanded:
+		_hide_item_hint()
 	if expand_tween != null and expand_tween.is_valid():
 		expand_tween.kill()
 	expand_tween = create_tween()
-	expand_tween.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	expand_tween.tween_property(self, "expanded_progress", 1.0 if expanded else 0.0, 0.35)
+	expand_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	expand_tween.tween_property(self, "expanded_progress", 1.0 if expanded else 0.0, CARD_OPEN_DURATION if expanded else CARD_CLOSE_DURATION)
 	expand_tween.finished.connect(_on_expand_tween_finished)
 	expanded_changed.emit(expanded)
 	_update_interaction_layout()
@@ -127,14 +150,15 @@ func _build_interaction_controls() -> void:
 		slot_button.flat = true
 		slot_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		slot_button.add_theme_stylebox_override("normal", _transparent_style())
-		slot_button.add_theme_stylebox_override("hover", _slot_button_style(Color(0.35, 0.75, 0.95, 0.12)))
-		slot_button.add_theme_stylebox_override("pressed", _slot_button_style(Color(0.98, 0.77, 0.25, 0.24)))
+		slot_button.add_theme_stylebox_override("hover", _transparent_style())
+		slot_button.add_theme_stylebox_override("pressed", _transparent_style())
 		slot_button.pressed.connect(_on_slot_pressed.bind(index, slot_button))
 		slot_button.gui_input.connect(_on_slot_gui_input.bind(index))
 		slot_buttons.append(slot_button)
 		add_child(slot_button)
 
 func set_item_inventory(items: Array[String]) -> void:
+	var previous_count := inventory_items.size()
 	var had_items := not inventory_items.is_empty()
 	inventory_items.clear()
 	for item_id in items:
@@ -142,9 +166,29 @@ func set_item_inventory(items: Array[String]) -> void:
 			break
 		if MerchantDataScript.is_card(item_id):
 			inventory_items.append(item_id)
+	if selected_item_index >= inventory_items.size():
+		_hide_item_hint()
+	if inventory_items.size() > previous_count:
+		pending_layout_from_count = previous_count
+	else:
+		pending_layout_from_count = -1
+		layout_transition_progress = 1.0
+		layout_transition_from_count = inventory_items.size()
+		layout_transition_to_count = inventory_items.size()
+		if layout_transition_tween != null and layout_transition_tween.is_valid():
+			layout_transition_tween.kill()
 	_update_slot_tooltips()
 	if not had_items and not inventory_items.is_empty():
 		set_expanded(true)
+	queue_redraw()
+
+func cancel_item_drag() -> void:
+	dragging_item_id = ""
+	dragging_item_index = -1
+	drag_started = false
+	dragging_screen_position = Vector2.ZERO
+	drag_start_screen_position = Vector2.ZERO
+	_hide_item_hint()
 	queue_redraw()
 
 func play_item_fly_in(item_id: String, origin_screen_position: Vector2) -> void:
@@ -152,6 +196,8 @@ func play_item_fly_in(item_id: String, origin_screen_position: Vector2) -> void:
 		return
 	if fly_tween != null and fly_tween.is_valid():
 		fly_tween.kill()
+	if layout_transition_tween != null and layout_transition_tween.is_valid():
+		layout_transition_tween.kill()
 	flying_item_id = item_id
 	flying_item_index = -1
 	for index in range(inventory_items.size() - 1, -1, -1):
@@ -159,12 +205,33 @@ func play_item_fly_in(item_id: String, origin_screen_position: Vector2) -> void:
 			flying_item_index = index
 			break
 	flying_start_local = get_global_transform_with_canvas().affine_inverse() * origin_screen_position
+	var previous_count := pending_layout_from_count
+	if previous_count >= 0 and previous_count < inventory_items.size() and previous_count > 0:
+		layout_transition_from_count = previous_count
+		layout_transition_to_count = inventory_items.size()
+		layout_transition_progress = 0.0
+		flying_start_local = _get_slot_target_rect(previous_count - 1, previous_count).get_center()
+	else:
+		layout_transition_from_count = inventory_items.size()
+		layout_transition_to_count = inventory_items.size()
+		layout_transition_progress = 1.0
+	pending_layout_from_count = -1
 	flying_progress = 0.0
 	_update_interaction_layout()
 	fly_tween = create_tween()
 	fly_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
 	fly_tween.tween_property(self, "flying_progress", 1.0, 0.45)
+	if layout_transition_from_count < layout_transition_to_count:
+		layout_transition_tween = create_tween()
+		layout_transition_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+		layout_transition_tween.tween_property(self, "layout_transition_progress", 1.0, 0.45)
+		layout_transition_tween.finished.connect(_finish_layout_transition)
 	fly_tween.finished.connect(_finish_item_fly_in)
+	queue_redraw()
+
+func _finish_layout_transition() -> void:
+	layout_transition_progress = 1.0
+	layout_transition_from_count = layout_transition_to_count
 	queue_redraw()
 
 func _finish_item_fly_in() -> void:
@@ -190,13 +257,9 @@ func _transparent_style() -> StyleBoxFlat:
 	style.border_width_bottom = 0
 	return style
 
-func _slot_button_style(color: Color) -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = color
-	style.set_corner_radius_all(7)
-	return style
-
 func _on_slot_pressed(_index: int, slot_button: Button) -> void:
+	if not dragging_item_id.is_empty():
+		return
 	_show_item_hint(_index)
 	var highlight_color := Color(1.22, 1.14, 0.82, slot_button.modulate.a)
 	var normal_color := Color(1.0, 1.0, 1.0, slot_button.modulate.a)
@@ -210,10 +273,17 @@ func _on_slot_gui_input(event: InputEvent, index: int) -> void:
 		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 		dragging_item_id = inventory_items[index]
+		dragging_item_index = index
 		dragging_screen_position = get_viewport().get_mouse_position()
 		drag_start_screen_position = dragging_screen_position
 		drag_started = false
 		accept_event()
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+		if selected_item_index >= 0 and dragging_item_id.is_empty():
+			_hide_item_hint()
+			queue_redraw()
 
 func _process(delta: float) -> void:
 	animation_time += delta
@@ -228,37 +298,71 @@ func _process(delta: float) -> void:
 		dragging_screen_position = get_viewport().get_mouse_position()
 		if not drag_started and dragging_screen_position.distance_to(drag_start_screen_position) >= 8.0:
 			drag_started = true
+		if drag_started:
+			inventory_item_dragged.emit(dragging_item_id, dragging_screen_position)
 		if not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 			var dropped_item := dragging_item_id
 			var dropped_position := dragging_screen_position
 			var was_dragged := drag_started
 			dragging_item_id = ""
+			dragging_item_index = -1
 			drag_started = false
 			if not dropped_item.is_empty() and was_dragged:
+				inventory_item_drag_ended.emit(dropped_item, dropped_position, true)
 				inventory_item_dropped.emit(dropped_item, dropped_position)
-	if not is_equal_approx(last_layout_progress, expanded_progress):
+			elif not dropped_item.is_empty():
+				inventory_item_drag_ended.emit(dropped_item, dropped_position, false)
+	if not is_equal_approx(last_layout_progress, expanded_progress) or not is_equal_approx(last_layout_transition_progress, layout_transition_progress):
 		_update_interaction_layout()
 	queue_redraw()
 
 func _head_center() -> Vector2:
 	return Vector2(maxf(58.0, size.x - 56.0), SLOT_TOP + SLOT_SIZE * 0.5)
 
-func _get_slot_layout() -> Dictionary:
-	var slot_size := minf(SLOT_SIZE, maxf(24.0, (size.x - 110.0) / 9.0))
-	var gap := minf(SLOT_GAP, maxf(2.0, slot_size * 0.15))
-	var left := 20.0
+func _get_slot_layout(card_count: int = -1) -> Dictionary:
+	# The cards intentionally overlap like a hand of playing cards. Keep the
+	# full hand right-aligned to the cat while remaining inside narrow screens.
+	var count: int = card_count if card_count >= 1 else maxi(1, inventory_items.size())
+	var head_center := _head_center()
+	var right_edge := head_center.x - HEAD_RADIUS - CARD_RIGHT_MARGIN
+	var left_margin := 8.0
+	var available_width := maxf(1.0, right_edge - left_margin)
+	var slot_size := minf(CARD_BASE_SIZE, maxf(CARD_MIN_SIZE, available_width / (1.0 + float(count - 1) * (1.0 - CARD_OVERLAP))))
+	var step := slot_size * (1.0 - CARD_OVERLAP)
+	var total_width := slot_size + step * float(count - 1)
+	# On very narrow screens, increase overlap instead of allowing clipping.
+	if total_width > available_width:
+		step = maxf(1.0, (available_width - slot_size) / float(max(1, count - 1)))
+		total_width = slot_size + step * float(count - 1)
+	var left := right_edge - total_width
 	return {
 		"size": slot_size,
-		"gap": gap,
+		"gap": step - slot_size,
 		"left": left,
-		"top": SLOT_TOP
+		"top": SLOT_TOP + SLOT_SIZE * 0.5 - slot_size * 0.5
 	}
 
-func _get_animated_slot_rect(index: int, progress: float) -> Rect2:
-	var layout := _get_slot_layout()
+func _get_card_deal_progress(index: int, progress: float) -> float:
+	var start := float(index) * CARD_DEAL_STAGGER
+	var deal_window := maxf(0.01, 1.0 - CARD_DEAL_STAGGER * 7.0)
+	return clampf((progress - start) / deal_window, 0.0, 1.0)
+
+func _get_slot_target_rect(index: int, card_count: int) -> Rect2:
+	var layout := _get_slot_layout(card_count)
 	var slot_size := float(layout["size"])
 	var gap := float(layout["gap"])
 	var target := Vector2(float(layout["left"]) + index * (slot_size + gap), float(layout["top"]))
+	if card_count == inventory_items.size() and index == selected_item_index and dragging_item_id.is_empty():
+		target.y -= SELECTED_CARD_RISE
+	return Rect2(target, Vector2(slot_size, slot_size))
+
+func _get_animated_slot_rect(index: int, progress: float) -> Rect2:
+	var slot_target := _get_slot_target_rect(index, inventory_items.size())
+	var target := slot_target.position
+	if layout_transition_from_count < layout_transition_to_count and index < layout_transition_from_count:
+		var old_target := _get_slot_target_rect(index, layout_transition_from_count)
+		target = old_target.position.lerp(slot_target.position, clampf(layout_transition_progress, 0.0, 1.0))
+	var slot_size := slot_target.size.x
 	var head_center := _head_center()
 	var origin := head_center - Vector2(slot_size * 0.5, slot_size * 0.5)
 	var slide := ease(clampf(progress, 0.0, 1.0), 0.82)
@@ -274,16 +378,20 @@ func _update_interaction_layout() -> void:
 	var slot_size := float(layout["size"])
 	for index in range(slot_buttons.size()):
 		var slot_button := slot_buttons[index]
-		var slot_rect := _get_animated_slot_rect(index, expanded_progress)
+		var card_progress := _get_card_deal_progress(index, expanded_progress)
+		var has_item := index < inventory_items.size()
+		var slot_rect := _get_animated_slot_rect(index, card_progress)
 		slot_button.position = slot_rect.position
 		slot_button.size = slot_rect.size
 		slot_button.pivot_offset = Vector2(slot_size * 0.5, slot_size * 0.5)
-		slot_button.visible = expanded_progress > 0.01
-		slot_button.disabled = expanded_progress < 0.55
+		slot_button.rotation = deg_to_rad(float(CARD_TILT_DEGREES[index]))
+		slot_button.visible = has_item and card_progress > 0.01
+		slot_button.disabled = not has_item or card_progress < 0.55
 		var slot_modulate := slot_button.modulate
-		slot_modulate.a = clampf(expanded_progress, 0.0, 1.0)
+		slot_modulate.a = card_progress if has_item else 0.0
 		slot_button.modulate = slot_modulate
 	last_layout_progress = expanded_progress
+	last_layout_transition_progress = layout_transition_progress
 
 func _draw() -> void:
 	var bob := sin(animation_time * 2.8) * 1.8
@@ -367,27 +475,23 @@ func _draw_expanded_body(head_center: Vector2, reveal: float) -> void:
 func _draw_item_slots(reveal: float) -> void:
 	var layout := _get_slot_layout()
 	var slot_size := float(layout["size"])
-	var alpha := clampf(reveal, 0.0, 1.0)
-	for index in range(8):
-		var rect := _get_animated_slot_rect(index, reveal)
-		draw_style_box(_slot_style(alpha), rect)
+	for index in range(inventory_items.size()):
+		var card_reveal := _get_card_deal_progress(index, reveal)
+		if card_reveal <= 0.01:
+			continue
+		var rect := _get_animated_slot_rect(index, card_reveal)
 		var center := rect.get_center()
-		draw_circle(center, maxf(3.0, slot_size * 0.13), Color(0.80, 0.87, 0.95, 0.20 * alpha))
-		draw_arc(center, slot_size * 0.25, -0.8, 2.2, 12, Color(0.80, 0.87, 0.95, 0.28 * alpha), 1.2, true)
-		if index < inventory_items.size() and not (index == flying_item_index and not flying_item_id.is_empty()):
-			_draw_item_icon(center, inventory_items[index], 0.72 * alpha)
+		if index != dragging_item_index and not (index == flying_item_index and not flying_item_id.is_empty()):
+			_draw_item_icon(center, inventory_items[index], 0.72 * (slot_size / SLOT_SIZE) * clampf(card_reveal, 0.0, 1.0), deg_to_rad(float(CARD_TILT_DEGREES[index])))
 	if not dragging_item_id.is_empty() and drag_started:
 		var dragging_local := get_global_transform_with_canvas().affine_inverse() * dragging_screen_position
-		_draw_item_icon(dragging_local, dragging_item_id, 0.90)
+		var drag_scale := 0.90 * float(layout["size"]) / SLOT_SIZE
+		_draw_item_icon(dragging_local, dragging_item_id, drag_scale, deg_to_rad(-2.0))
 	if not flying_item_id.is_empty() and flying_item_index >= 0:
-		var fly_layout := _get_slot_layout()
-		var fly_slot_size := float(fly_layout["size"])
-		var fly_gap := float(fly_layout["gap"])
-		var fly_left := float(fly_layout["left"])
-		var fly_top := float(fly_layout["top"])
-		var target := Vector2(fly_left + flying_item_index * (fly_slot_size + fly_gap) + fly_slot_size * 0.5, fly_top + fly_slot_size * 0.5)
+		var fly_slot_size := float(layout["size"])
+		var target := _get_slot_target_rect(flying_item_index, inventory_items.size()).get_center()
 		var fly_position := flying_start_local.lerp(target, flying_progress)
-		_draw_item_icon(fly_position, flying_item_id, 0.90 * (1.0 - flying_progress * 0.22))
+		_draw_item_icon(fly_position, flying_item_id, 0.90 * (fly_slot_size / SLOT_SIZE) * (1.0 - flying_progress * 0.22))
 	if item_hint_index >= 0 and item_hint_index < inventory_items.size() and item_hint_progress < 1.0:
 		_draw_item_hint(item_hint_index, item_hint_text, item_hint_progress)
 
@@ -428,8 +532,16 @@ func _wrap_item_hint(text: String) -> String:
 		lines.append(line)
 	return "\n".join(lines)
 
-func _draw_item_icon(center: Vector2, item_id: String, scale: float) -> void:
-	draw_set_transform(center, 0.0, Vector2(scale, scale))
+func _draw_item_icon(center: Vector2, item_id: String, scale: float, rotation := 0.0) -> void:
+	draw_set_transform(center, rotation, Vector2(scale, scale))
+	if not MerchantDataScript.is_sealed_barracks_card(item_id):
+		var card_art := MerchantCardIconScript.CARD_ART.get(item_id) as Texture2D
+		if card_art != null:
+			var card_width := 52.0
+			var card_height := card_width * card_art.get_height() / maxf(1.0, card_art.get_width())
+			draw_texture_rect(card_art, Rect2(-card_width * 0.5, -card_height * 0.5, card_width, card_height), false)
+			draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+			return
 	match item_id:
 		MerchantDataScript.ITEM_DRAGON:
 			draw_colored_polygon(PackedVector2Array([Vector2(-14, 8), Vector2(0, -13), Vector2(14, 8)]), Color("#ef4444"))
@@ -469,89 +581,14 @@ func _draw_item_icon(center: Vector2, item_id: String, scale: float) -> void:
 		draw_string(ThemeDB.fallback_font, Vector2(-4, 17), str(sealed_level), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("#fef08a"))
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
-func _slot_style(alpha: float) -> StyleBoxFlat:
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.03, 0.08, 0.15, 0.92 * alpha)
-	style.border_color = Color(0.55, 0.70, 0.84, 0.86 * alpha)
-	style.set_border_width_all(1)
-	style.set_corner_radius_all(7)
-	return style
-
 func _draw_cat_head(center: Vector2) -> void:
-	var body := Color("#d8dee7")
-	var body_shadow := Color("#778397")
-	var face := Color("#f1f5f9")
-	var ear_inner := Color("#f9a8d4")
-	var eye := Color("#172033")
-	var pink := Color("#fb8fbc")
-
-	_draw_ellipse(center + Vector2(0.0, 37.0), Vector2(35.0, 7.0), Color(0.0, 0.0, 0.0, 0.24))
-	draw_colored_polygon(PackedVector2Array([
-		center + Vector2(-31.0, -17.0), center + Vector2(-26.0, -53.0), center + Vector2(-4.0, -28.0)
-	]), body_shadow)
-	draw_colored_polygon(PackedVector2Array([
-		center + Vector2(4.0, -28.0), center + Vector2(27.0, -53.0), center + Vector2(32.0, -17.0)
-	]), body_shadow)
-	draw_colored_polygon(PackedVector2Array([
-		center + Vector2(-24.0, -22.0), center + Vector2(-22.0, -43.0), center + Vector2(-8.0, -27.0)
-	]), ear_inner)
-	draw_colored_polygon(PackedVector2Array([
-		center + Vector2(8.0, -27.0), center + Vector2(22.0, -43.0), center + Vector2(24.0, -22.0)
-	]), ear_inner)
-	_draw_ellipse(center + Vector2(0.0, 3.0), Vector2(36.0, 35.0), body_shadow)
-	_draw_ellipse(center + Vector2(0.0, -1.0), Vector2(34.0, 34.0), body)
-	_draw_ellipse(center + Vector2(0.0, 5.0), Vector2(30.0, 28.0), face)
-
-	# A small soldier helmet keeps the cat's friendly face visible while
-	# giving the companion a clear battlefield identity.
-	var helmet_dark := Color("#334155")
-	var helmet := Color("#64748b")
-	draw_colored_polygon(PackedVector2Array([
-		center + Vector2(-25.0, -27.0), center + Vector2(-20.0, -44.0),
-		center + Vector2(-8.0, -53.0), center + Vector2(8.0, -53.0),
-		center + Vector2(21.0, -44.0), center + Vector2(26.0, -27.0)
-	]), helmet_dark)
-	draw_colored_polygon(PackedVector2Array([
-		center + Vector2(-20.0, -29.0), center + Vector2(-16.0, -42.0),
-		center + Vector2(0.0, -49.0), center + Vector2(16.0, -42.0),
-		center + Vector2(20.0, -29.0)
-	]), helmet)
-	draw_colored_polygon(PackedVector2Array([
-		center + Vector2(-29.0, -29.0), center + Vector2(29.0, -29.0),
-		center + Vector2(25.0, -22.0), center + Vector2(-25.0, -22.0)
-	]), helmet_dark)
-	draw_line(center + Vector2(-21.0, -28.0), center + Vector2(21.0, -28.0), Color("#cbd5e1"), 2.0, true)
-	draw_circle(center + Vector2(0.0, -40.0), 4.0, Color("#fbbf24"))
-	draw_circle(center + Vector2(0.0, -40.0), 2.0, Color("#fff7cc"))
-
-	var blinking := blink_timer > 3.02
-	if blinking:
-		draw_arc(center + Vector2(-12.0, -3.0), 6.0, 0.15, 2.9, 10, eye, 2.4, true)
-		draw_arc(center + Vector2(12.0, -3.0), 6.0, 0.25, 2.99, 10, eye, 2.4, true)
-	else:
-		_draw_ellipse(center + Vector2(-12.0, -3.0), Vector2(7.0, 10.0), eye)
-		_draw_ellipse(center + Vector2(12.0, -3.0), Vector2(7.0, 10.0), eye)
-		draw_circle(center + Vector2(-10.0, -7.0), 2.8, Color.WHITE)
-		draw_circle(center + Vector2(14.0, -7.0), 2.8, Color.WHITE)
-		draw_circle(center + Vector2(-14.0, 3.0), 1.5, Color(0.65, 0.75, 0.88, 0.9))
-		draw_circle(center + Vector2(10.0, 3.0), 1.5, Color(0.65, 0.75, 0.88, 0.9))
-
-	_draw_ellipse(center + Vector2(-20.0, 13.0), Vector2(7.0, 4.0), Color(1.0, 0.45, 0.65, 0.34))
-	_draw_ellipse(center + Vector2(20.0, 13.0), Vector2(7.0, 4.0), Color(1.0, 0.45, 0.65, 0.34))
-	draw_colored_polygon(PackedVector2Array([
-		center + Vector2(-4.0, 10.0), center + Vector2(4.0, 10.0), center + Vector2(0.0, 15.0)
-	]), pink)
-	draw_arc(center + Vector2(0.0, 14.0), 7.0, 0.2, 1.35, 8, body_shadow, 1.6, true)
-	draw_arc(center + Vector2(0.0, 14.0), 7.0, 1.8, 2.95, 8, body_shadow, 1.6, true)
-
-	for side in [-1.0, 1.0]:
-		draw_line(center + Vector2(side * 24.0, 11.0), center + Vector2(side * 43.0, 7.0), body_shadow, 1.2, true)
-		draw_line(center + Vector2(side * 24.0, 15.0), center + Vector2(side * 44.0, 17.0), body_shadow, 1.2, true)
-
-	# Small officer badge remains visible in the expanded version.
-	draw_circle(center + Vector2(-30.0, 28.0), 9.0, Color("#172033"))
-	draw_circle(center + Vector2(-30.0, 28.0), 6.0, Color("#fbbf24"))
-	draw_circle(center + Vector2(-30.0, 28.0), 2.0, Color("#fff7cc"))
+	var art_width := 104.0
+	var art_height := art_width * CAT_OFFICER_ART.get_height() / maxf(1.0, CAT_OFFICER_ART.get_width())
+	draw_texture_rect(
+		CAT_OFFICER_ART,
+		Rect2(center - Vector2(art_width, art_height) * 0.5, Vector2(art_width, art_height)),
+		false
+	)
 
 func _draw_ellipse(center: Vector2, radii: Vector2, color: Color) -> void:
 	var points := PackedVector2Array()

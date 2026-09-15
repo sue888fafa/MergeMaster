@@ -1,6 +1,19 @@
 class_name MerchantCardIcon
 extends Control
 
+const CARD_ART := {
+	"dragon": preload("res://assets/generated/cards/dragon.png"),
+	"upgrade": preload("res://assets/generated/cards/upgrade.png"),
+	"steel_barrier": preload("res://assets/generated/cards/steel_barrier.png"),
+	"blizzard": preload("res://assets/generated/cards/blizzard.png"),
+	"transfer_certificate": preload("res://assets/generated/cards/transfer_certificate.png"),
+	"occupy": preload("res://assets/generated/cards/occupy.png"),
+	"build": preload("res://assets/generated/cards/build.png"),
+	"recycle": preload("res://assets/generated/cards/recycle.png"),
+	"steal": preload("res://assets/generated/cards/steal.png")
+}
+const COIN_ART := preload("res://assets/generated/ui/coin.png")
+
 var card_id := ""
 var coin_mode := false
 
@@ -20,11 +33,27 @@ func _ready() -> void:
 func _draw() -> void:
 	var center := size * 0.5
 	if coin_mode:
+		if COIN_ART != null:
+			var art_size := Vector2(COIN_ART.get_size())
+			var fit_scale := minf(size.x / maxf(1.0, art_size.x), size.y / maxf(1.0, art_size.y))
+			var draw_size := art_size * fit_scale
+			draw_texture_rect(COIN_ART, Rect2((size - draw_size) * 0.5, draw_size), false)
+			return
 		draw_circle(center + Vector2(1.5, 2.0), 12.0, Color(0.12, 0.08, 0.02, 0.28))
 		draw_circle(center, 12.0, Color("#facc15"))
 		draw_circle(center, 8.0, Color("#fde68a"))
 		draw_arc(center, 12.0, 0.0, TAU, 24, Color("#a16207"), 2.0, true)
 		draw_string(ThemeDB.fallback_font, center + Vector2(-4.5, 5.0), "金", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("#a16207"))
+		return
+
+	var card_art := CARD_ART.get(card_id) as Texture2D
+	if card_art != null:
+		# The supplied card art includes its own frame, title, and illustration.
+		# Keep the procedural renderer below as a fallback for future card IDs.
+		var art_size := Vector2(card_art.get_size())
+		var fit_scale := minf(size.x / maxf(1.0, art_size.x), size.y / maxf(1.0, art_size.y))
+		var draw_size := art_size * fit_scale
+		draw_texture_rect(card_art, Rect2((size - draw_size) * 0.5, draw_size), false)
 		return
 
 	var card_color := Color("#64748b")

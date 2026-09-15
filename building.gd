@@ -1,6 +1,8 @@
 class_name BuildingLayer
 extends Node2D
 
+const BARRACKS_UPGRADE_HINT_TEXTURE := preload("res://assets/generated/effects/barracks_upgrade.png")
+
 const Config := preload("res://game_config.gd")
 const Art := preload("res://art_theme.gd")
 
@@ -133,26 +135,22 @@ func _draw_merge_indicator(anchor: Dictionary, level: int) -> void:
 	var tier := clampi(level, 1, 4)
 	var scale := float(anchor.get("scale", Config.BARRACKS_LEVEL_SCALE[tier - 1]))
 	var model_center := Vector2(anchor["center"])
-	var cycle := fmod(board.mergeable_effect_elapsed * 0.45, 1.0)
-	var arrow_color := Color(1.0, 0.78, 0.08, 0.56)
-	var arrow_outline := Color(0.15, 0.09, 0.02, 0.46)
+	# Use a ping-pong cycle so the arrow returns smoothly instead of jumping
+	# from its highest point back to the starting position.
+	var cycle := fmod(board.mergeable_effect_elapsed * 0.45, 2.0)
 	var progress := cycle
-	var alpha := 0.18 + (1.0 - progress) * 0.42
+	if progress > 1.0:
+		progress = 2.0 - progress
 	var arrow_center := model_center + Vector2(0.0, -2.0 - progress * 12.0 * scale)
-	var arrow_size := 6.5 * scale
-	var shaft_start := arrow_center + Vector2(0.0, arrow_size * 1.20)
-	var shaft_end := arrow_center + Vector2(0.0, -arrow_size * 0.55)
-	var head_left := arrow_center + Vector2(-arrow_size, arrow_size * 0.50)
-	var head_right := arrow_center + Vector2(arrow_size, arrow_size * 0.50)
-	var outline_alpha := alpha * 0.80
-	var outline_width := maxf(2.5, 5.0 * scale)
-	var arrow_width := maxf(1.8, 3.2 * scale)
-	draw_line(shaft_start, shaft_end, Color(arrow_outline, outline_alpha), outline_width, true)
-	draw_line(shaft_start, shaft_end, Color(arrow_color, alpha), arrow_width, true)
-	draw_line(head_left, shaft_end, Color(arrow_outline, outline_alpha), outline_width, true)
-	draw_line(head_right, shaft_end, Color(arrow_outline, outline_alpha), outline_width, true)
-	draw_line(head_left, shaft_end, Color(arrow_color, alpha), arrow_width, true)
-	draw_line(head_right, shaft_end, Color(arrow_color, alpha), arrow_width, true)
+	var width := 18.0 * scale
+	var height := width * BARRACKS_UPGRADE_HINT_TEXTURE.get_height() / maxf(1.0, BARRACKS_UPGRADE_HINT_TEXTURE.get_width())
+	var alpha := 0.72 + (1.0 - progress) * 0.28
+	draw_texture_rect(
+		BARRACKS_UPGRADE_HINT_TEXTURE,
+		Rect2(arrow_center - Vector2(width, height) * 0.5, Vector2(width, height)),
+		false,
+		Color(1.0, 1.0, 1.0, alpha)
+	)
 
 func _offset_barracks_anchor(anchor: Dictionary, offset: Vector2) -> Dictionary:
 	var result := anchor.duplicate()

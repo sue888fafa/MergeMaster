@@ -93,7 +93,9 @@ func _build_renderers() -> void:
 		profile_renderers.append(buckets)
 	# One shared multimesh keeps the foot shadow inexpensive even with many
 	# soldiers on screen.
-	shadow_renderer = _make_solid_renderer(Vector2(29.0, 10.0), Color(0.02, 0.04, 0.08, 0.48), -2, _make_ellipse_texture(false))
+	# Keep the shadow above the opaque board and below the unit renderers. A
+	# negative z-index put it behind the tiles, making the foot shadow vanish.
+	shadow_renderer = _make_solid_renderer(Vector2(29.0, 10.0), Color(0.26, 0.17, 0.22, 0.48), 0, _make_ellipse_texture(false))
 	halo_renderer = _make_solid_renderer(Vector2(36.0, 18.0), Color.WHITE, -1, _make_ellipse_texture(true))
 	health_back_renderer = _make_solid_renderer(Vector2(26.0, 4.0), Color("#172033"), DEPTH_BUCKET_COUNT + 1)
 	health_fill_renderer = _make_solid_renderer(Vector2(22.0, 2.0), Color.WHITE, DEPTH_BUCKET_COUNT + 2)
@@ -104,6 +106,7 @@ func _make_atlas_material(profile: UnitVisualProfile) -> ShaderMaterial:
 	material.set_shader_parameter("atlas_grid", profile.atlas_grid())
 	material.set_shader_parameter("frame_uv_size", profile.frame_uv_size())
 	material.set_shader_parameter("has_faction_mask", profile.faction_mask_texture != null)
+	material.set_shader_parameter("use_instance_tint", true)
 	if profile.faction_mask_texture != null:
 		material.set_shader_parameter("faction_mask", profile.faction_mask_texture)
 	return material
@@ -207,27 +210,30 @@ func _update_profile_instances(class_index: int, bucket_index: int, entries: Arr
 		var animation_name := "death" if is_death else str(entry.get_visual_animation())
 		var elapsed := float(entry["elapsed"]) if is_death else float(entry.get_visual_elapsed())
 		var faction := int(entry["faction"]) if is_death else int(entry.faction)
-		var level_scale := float(Config.UNIT_LEVEL_VISUAL_SCALE[clampi(level, 1, 4) - 1])
+		var level_scale := float(Config.UNIT_LEVEL_VISUAL_SCALE[clampi(level, 1, 4) - 1]) * Config.UNIT_DISPLAY_SCALE
 		var origin: Vector2 = entry_position + profile.pivot_offset * level_scale
 		var transform := Transform2D(0.0, Vector2(level_scale, level_scale), 0.0, origin)
 		var frame_value := profile.normalized_frame(animation_name, direction, elapsed, current_lod)
+		var faction_color := _faction_color(faction)
 		multimesh.set_instance_transform_2d(index, transform)
-		multimesh.set_instance_color(index, _faction_color(faction))
-		multimesh.set_instance_custom_data(index, Color(frame_value, 0.0, 0.0, 0.0))
+		# Store tint separately from the mesh color. The CanvasItem COLOR input
+		# is not a reliable per-instance channel on every mobile renderer.
+		multimesh.set_instance_color(index, Color.WHITE)
+		multimesh.set_instance_custom_data(index, Color(frame_value, faction_color.r, faction_color.g, faction_color.b))
 
 func _update_decorative_instances(units: Array) -> void:
 	var shadow_units: Array = [] if current_lod == LOD_FAR else units
 	_prepare_instances(shadow_renderer.multimesh, shadow_units.size())
 	for index in range(shadow_units.size()):
 		var unit = shadow_units[index]
-		var scale := float(Config.UNIT_LEVEL_VISUAL_SCALE[clampi(int(unit.barracks_level), 1, 4) - 1])
+		var scale := float(Config.UNIT_LEVEL_VISUAL_SCALE[clampi(int(unit.barracks_level), 1, 4) - 1]) * Config.UNIT_DISPLAY_SCALE
 		shadow_renderer.multimesh.set_instance_transform_2d(index, Transform2D(0.0, Vector2(scale, scale), 0.0, unit.position + Vector2(2.0, 15.0) * scale))
 		shadow_renderer.multimesh.set_instance_color(index, Color.WHITE)
 	_prepare_instances(halo_renderer.multimesh, units.size())
 	for index in range(units.size()):
 		var unit = units[index]
-		var scale := float(Config.UNIT_LEVEL_VISUAL_SCALE[clampi(int(unit.barracks_level), 1, 4) - 1])
-		var halo_color := Color(0.35, 0.9, 1.0, 0.72) if bool(unit.is_frozen()) else Color(_faction_color(int(unit.faction)), 0.42)
+		var scale := float(Config.UNIT_LEVEL_VISUAL_SCALE[clampi(int(unit.barracks_level), 1, 4) - 1]) * Config.UNIT_DISPLAY_SCALE
+		var halo_color := Color(0.35, 0.9, 1.0, 0.72) if bool(unit.is_frozen()) else Color(_faction_color(int(unit.faction)), 0.20)
 		halo_renderer.multimesh.set_instance_transform_2d(index, Transform2D(0.0, Vector2(scale, scale), 0.0, unit.position + Vector2(0.0, 5.0) * scale))
 		halo_renderer.multimesh.set_instance_color(index, halo_color)
 	var damaged: Array = []
@@ -243,7 +249,7 @@ func _update_decorative_instances(units: Array) -> void:
 	_prepare_instances(health_fill_renderer.multimesh, damaged.size())
 	for index in range(damaged.size()):
 		var unit = damaged[index]
-		var scale := float(Config.UNIT_LEVEL_VISUAL_SCALE[clampi(int(unit.barracks_level), 1, 4) - 1])
+		var scale := float(Config.UNIT_LEVEL_VISUAL_SCALE[clampi(int(unit.barracks_level), 1, 4) - 1]) * Config.UNIT_DISPLAY_SCALE
 		var ratio := clampf(float(unit.hp) / maxf(1.0, float(unit.max_hp)), 0.0, 1.0)
 		var bar_position: Vector2 = unit.position + Vector2(0.0, -18.0) * scale
 		health_back_renderer.multimesh.set_instance_transform_2d(index, Transform2D(0.0, Vector2(scale, scale), 0.0, bar_position))

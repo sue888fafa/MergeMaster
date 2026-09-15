@@ -1,7 +1,7 @@
 class_name EquipmentData
 extends RefCounted
 
-const SLOT_NAMES := ["鞋子", "盔甲", "戒指", "武器", "饰品"]
+const SLOT_NAMES := ["鞋子", "盔甲", "头盔", "手套", "项链"]
 
 const ITEM_IDS := [
 	"alliance_boots", "tribe_boots", "undead_boots",
@@ -15,21 +15,21 @@ const QUALITY_NAMES := ["", "普通", "稀有", "史诗"]
 const QUALITY_COLORS := ["#cbd5e1", "#cbd5e1", "#60a5fa", "#c084fc"]
 
 const ITEMS := {
-	"alliance_boots": {"slot_index": 0, "slot": "鞋子", "name": "联盟之靴", "icon": "res://assets/equipment/alliance_boots.svg", "effect_type": "move_speed", "base_effect_value": 0.05},
-	"tribe_boots": {"slot_index": 0, "slot": "鞋子", "name": "部落之靴", "icon": "res://assets/equipment/tribe_boots.svg", "effect_type": "move_speed", "base_effect_value": 0.05},
-	"undead_boots": {"slot_index": 0, "slot": "鞋子", "name": "亡灵之靴", "icon": "res://assets/equipment/undead_boots.svg", "effect_type": "move_speed", "base_effect_value": 0.05},
-	"alliance_armor": {"slot_index": 1, "slot": "盔甲", "name": "联盟盔甲", "icon": "res://assets/equipment/alliance_armor.svg", "effect_type": "health", "base_effect_value": 0.05},
-	"tribe_armor": {"slot_index": 1, "slot": "盔甲", "name": "部落盔甲", "icon": "res://assets/equipment/tribe_armor.svg", "effect_type": "health", "base_effect_value": 0.05},
-	"undead_armor": {"slot_index": 1, "slot": "盔甲", "name": "亡灵盔甲", "icon": "res://assets/equipment/undead_armor.svg", "effect_type": "health", "base_effect_value": 0.05},
-	"alliance_ring": {"slot_index": 2, "slot": "戒指", "name": "联盟之戒", "icon": "res://assets/equipment/alliance_ring.svg", "effect_type": "summon_speed", "base_effect_value": 0.05},
-	"tribe_ring": {"slot_index": 2, "slot": "戒指", "name": "部落之戒", "icon": "res://assets/equipment/tribe_ring.svg", "effect_type": "summon_speed", "base_effect_value": 0.05},
-	"undead_ring": {"slot_index": 2, "slot": "戒指", "name": "亡灵之戒", "icon": "res://assets/equipment/undead_ring.svg", "effect_type": "summon_speed", "base_effect_value": 0.05},
-	"alliance_sword": {"slot_index": 3, "slot": "武器", "name": "联盟之剑", "icon": "res://assets/equipment/alliance_sword.svg", "effect_type": "attack", "base_effect_value": 0.05},
-	"tribe_sword": {"slot_index": 3, "slot": "武器", "name": "部落之剑", "icon": "res://assets/equipment/tribe_sword.svg", "effect_type": "attack", "base_effect_value": 0.05},
-	"undead_sword": {"slot_index": 3, "slot": "武器", "name": "亡灵之剑", "icon": "res://assets/equipment/undead_sword.svg", "effect_type": "attack", "base_effect_value": 0.05},
-	"favor_necklace": {"slot_index": 4, "slot": "饰品", "name": "眷顾项链", "icon": "res://assets/equipment/favor_necklace.svg", "effect_type": "luck", "base_effect_value": 1.0},
-	"tenacity_shield": {"slot_index": 4, "slot": "饰品", "name": "坚韧盾牌", "icon": "res://assets/equipment/tenacity_shield.svg", "effect_type": "building_health", "base_effect_value": 0.05},
-	"greed_gloves": {"slot_index": 4, "slot": "饰品", "name": "贪婪手套", "icon": "res://assets/equipment/greed_gloves.svg", "effect_type": "gold_regen", "base_effect_value": 1.0}
+	"alliance_boots": {"slot_index": 0, "slot": "鞋子", "name": "联盟之靴", "icon": "res://assets/equipment/boots.png", "effect_type": "move_speed", "base_effect_value": 0.05},
+	"tribe_boots": {"slot_index": 0, "slot": "鞋子", "name": "部落之靴", "icon": "res://assets/equipment/boots.png", "effect_type": "move_speed", "base_effect_value": 0.05},
+	"undead_boots": {"slot_index": 0, "slot": "鞋子", "name": "亡灵之靴", "icon": "res://assets/equipment/boots.png", "effect_type": "move_speed", "base_effect_value": 0.05},
+	"alliance_armor": {"slot_index": 1, "slot": "盔甲", "name": "联盟盔甲", "icon": "res://assets/equipment/armor.png", "effect_type": "health", "base_effect_value": 0.05},
+	"tribe_armor": {"slot_index": 1, "slot": "盔甲", "name": "部落盔甲", "icon": "res://assets/equipment/armor.png", "effect_type": "health", "base_effect_value": 0.05},
+	"undead_armor": {"slot_index": 1, "slot": "盔甲", "name": "亡灵盔甲", "icon": "res://assets/equipment/armor.png", "effect_type": "health", "base_effect_value": 0.05},
+	"alliance_ring": {"slot_index": 2, "slot": "头盔", "name": "联盟头盔", "icon": "res://assets/equipment/helmet.png", "effect_type": "summon_speed", "base_effect_value": 0.05},
+	"tribe_ring": {"slot_index": 2, "slot": "头盔", "name": "部落头盔", "icon": "res://assets/equipment/helmet.png", "effect_type": "summon_speed", "base_effect_value": 0.05},
+	"undead_ring": {"slot_index": 2, "slot": "头盔", "name": "亡灵头盔", "icon": "res://assets/equipment/helmet.png", "effect_type": "summon_speed", "base_effect_value": 0.05},
+	"alliance_sword": {"slot_index": 3, "slot": "手套", "name": "联盟手套", "icon": "res://assets/equipment/gloves.png", "effect_type": "attack", "base_effect_value": 0.05},
+	"tribe_sword": {"slot_index": 3, "slot": "手套", "name": "部落手套", "icon": "res://assets/equipment/gloves.png", "effect_type": "attack", "base_effect_value": 0.05},
+	"undead_sword": {"slot_index": 3, "slot": "手套", "name": "亡灵手套", "icon": "res://assets/equipment/gloves.png", "effect_type": "attack", "base_effect_value": 0.05},
+	"favor_necklace": {"slot_index": 4, "slot": "项链", "name": "眷顾项链", "icon": "res://assets/equipment/necklace.png", "effect_type": "luck", "base_effect_value": 1.0},
+	"tenacity_shield": {"slot_index": 4, "slot": "项链", "name": "坚韧项链", "icon": "res://assets/equipment/necklace.png", "effect_type": "building_health", "base_effect_value": 0.05},
+	"greed_gloves": {"slot_index": 4, "slot": "项链", "name": "贪婪项链", "icon": "res://assets/equipment/necklace.png", "effect_type": "gold_regen", "base_effect_value": 1.0}
 }
 
 static func get_item(item_id: String) -> Dictionary:

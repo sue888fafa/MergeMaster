@@ -7,8 +7,8 @@ Each unit class may provide two `1024x1024` PNG files:
 
 The current art set uses a six-direction static layout. The first six `96x96`
 cells in the top row are selected by the runtime movement mapping. In atlas-cell
-order they represent the authored views for down-right, up-right, left,
-up-left, down-left, and right; all remaining cells are transparent. These
+order they correspond to the logical movement vectors down-right, up-right,
+left, up-left, down-left, and right; all remaining cells are transparent. These
 frames are selected from movement direction and are not animation frames.
 
 Legacy animated atlases may still use all 96 cells of `96x96` pixels in the

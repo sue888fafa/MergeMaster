@@ -1,10 +1,15 @@
 class_name HexBoard
 extends Node2D
 
+const BARRACKS_UPGRADE_HINT_TEXTURE := preload("res://assets/generated/effects/barracks_upgrade.png")
+
 const Config := preload("res://game_config.gd")
 const Art := preload("res://art_theme.gd")
 const MERCHANT_ART := preload("res://assets/generated/merchant.png")
+const HEADQUARTERS_ART := preload("res://assets/generated/base/headquarters.png")
 const VISIBLE_GOLD_MINE_ART := preload("res://assets/generated/visible_landmarks/visible_gold_mine.png")
+const VISIBLE_WILD_MONSTER_ART := preload("res://assets/generated/visible_landmarks/visible_wild_monster.png")
+const DIVINATION_HOUSE_ART := preload("res://assets/generated/visible_landmarks/divination_house.png")
 const TILE_UNCLAIMED_ART := preload("res://assets/generated/tiles/tile_unclaimed.png")
 const TILE_GREEN_ART := preload("res://assets/generated/tiles/tile_green.png")
 const TILE_BLUE_ART := preload("res://assets/generated/tiles/tile_blue.png")
@@ -31,6 +36,9 @@ signal tile_reveal_midpoint(cell: Vector2i)
 signal tile_reveal_finished(cell: Vector2i)
 signal intelligence_building_drop_finished(cell: Vector2i)
 signal building_changed(cell: Vector2i, building: int)
+signal building_destroy_effect_requested(cell: Vector2i, building: int, level: int)
+signal divination_effect_finished(cell: Vector2i)
+signal divination_barracks_warning_finished(cell: Vector2i)
 
 const UNKNOWN := 0
 const PLAYER := Config.FACTION_PLAYER
@@ -87,6 +95,10 @@ var reveal_animations: Dictionary = {}
 var barracks_merge_animations: Dictionary = {}
 var intelligence_building_drop_animations: Dictionary = {}
 var merchant_presentation_animations: Dictionary = {}
+var merchant_departure_animations: Dictionary = {}
+var divination_completion_animations: Dictionary = {}
+var divination_barracks_warning_animations: Dictionary = {}
+var headquarters_art_cache: Dictionary = {}
 var bombardment_cells: Array[Vector2i] = []
 var bombardment_warning_cells: Array[Vector2i] = []
 var bombardment_warning_elapsed := 0.0
@@ -96,6 +108,8 @@ var tile_material_elapsed := 0.0
 var tile_material_redraw_timer := 0.0
 var card_land_loss_cell := Vector2i(999, 999)
 var card_land_loss_elapsed := 0.0
+var card_drag_target_cell := Vector2i(999, 999)
+var card_drag_target_valid := false
 var camera_focus_tween: Tween
 var cells_within_detection_range: Dictionary = {}
 var building_visual_dirty := true
@@ -242,6 +256,9 @@ func reset() -> void:
 	barracks_merge_animations.clear()
 	intelligence_building_drop_animations.clear()
 	merchant_presentation_animations.clear()
+	merchant_departure_animations.clear()
+	divination_completion_animations.clear()
+	divination_barracks_warning_animations.clear()
 	buildable_cells.clear()
 	mergeable_cells.clear()
 	merge_effect_cells.clear()
@@ -352,12 +369,19 @@ func set_tile_owner(cell: Vector2i, owner: int, revealed := true) -> void:
 	tiles[cell]["revealed"] = revealed
 	building_visual_dirty = true
 
-func set_building(cell: Vector2i, building: int, level: int = 1, unit_class: int = -1, revealed: bool = true) -> void:
+func set_building(cell: Vector2i, building: int, level: int = 1, unit_class: int = -1, revealed: bool = true, play_destroy_effect: bool = true) -> void:
 	if tiles.has(cell):
+		var previous_building := int(tiles[cell].get("building", EMPTY))
+		var previous_level := int(tiles[cell].get("building_level", 0))
+		var next_level := clampi(level, 1, 4) if building == BARRACKS else 0
+		var is_destroyed := previous_building != EMPTY and building == EMPTY
+		var is_barracks_downgrade := previous_building == BARRACKS and building == BARRACKS and next_level < previous_level
+		if (is_destroyed or is_barracks_downgrade) and play_destroy_effect:
+			building_destroy_effect_requested.emit(cell, previous_building, previous_level)
 		tiles[cell]["building"] = building
 		# A normal placement or merge-consumed slot is no longer a destroyed-building slot.
 		tiles[cell]["rebuildable"] = false
-		tiles[cell]["building_level"] = clampi(level, 1, 4) if building == BARRACKS else 0
+		tiles[cell]["building_level"] = next_level
 		if building == BARRACKS:
 			tiles[cell]["unit_class"] = clampi(unit_class, 0, Config.UNIT_CLASS_COUNT - 1)
 			tiles[cell]["barracks_visual_timer"] = 0.0
@@ -524,6 +548,22 @@ func set_card_land_loss_cell(cell: Vector2i) -> void:
 func clear_card_land_loss_cell() -> void:
 	card_land_loss_cell = Vector2i(999, 999)
 	card_land_loss_elapsed = 0.0
+	card_drag_target_cell = Vector2i(999, 999)
+	card_drag_target_valid = false
+	queue_redraw()
+
+func set_card_drag_target(cell: Vector2i, valid: bool) -> void:
+	if card_drag_target_cell == cell and card_drag_target_valid == valid:
+		return
+	card_drag_target_cell = cell
+	card_drag_target_valid = valid
+	queue_redraw()
+
+func clear_card_drag_target() -> void:
+	if card_drag_target_cell == Vector2i(999, 999) and not card_drag_target_valid:
+		return
+	card_drag_target_cell = Vector2i(999, 999)
+	card_drag_target_valid = false
 	queue_redraw()
 
 func reveal(cell: Vector2i, building: int, level: int = 1, unit_class: int = -1) -> void:
@@ -739,13 +779,15 @@ func _process(delta: float) -> void:
 	_process_barracks_merge_animations(delta)
 	_process_intelligence_building_drop_animations(delta)
 	_process_merchant_presentation_animations(delta)
+	_process_divination_completion_animations(delta)
+	_process_divination_barracks_warning_animations(delta)
 	merge_effect_refresh_timer -= delta
 	if merge_effect_refresh_timer <= 0.0:
 		_refresh_merge_effect_cells()
 		merge_effect_refresh_timer = 0.2
 	if not merge_effect_cells.is_empty():
 		mergeable_effect_elapsed += delta
-	if not purchasable_cell_set.is_empty() or not buildable_cell_set.is_empty() or not mergeable_cell_set.is_empty() or tiles.has(barracks_range_cell):
+	if not purchasable_cell_set.is_empty() or not buildable_cell_set.is_empty() or not mergeable_cell_set.is_empty() or not merge_effect_cell_set.is_empty() or tiles.has(barracks_range_cell):
 		tile_material_elapsed += delta
 		tile_material_redraw_timer -= delta
 		if tile_material_redraw_timer <= 0.0:
@@ -828,6 +870,12 @@ func stop_merchant_presentation(cell: Vector2i) -> void:
 	if merchant_presentation_animations.erase(cell):
 		queue_redraw()
 
+func start_merchant_departure(cell: Vector2i) -> void:
+	if not tiles.has(cell):
+		return
+	merchant_departure_animations[cell] = 0.0
+	queue_redraw()
+
 func is_merchant_presenting(cell: Vector2i) -> bool:
 	return merchant_presentation_animations.has(cell)
 
@@ -837,7 +885,7 @@ func clear_merchant_presentations() -> void:
 		queue_redraw()
 
 func _process_merchant_presentation_animations(delta: float) -> void:
-	if merchant_presentation_animations.is_empty():
+	if merchant_presentation_animations.is_empty() and merchant_departure_animations.is_empty():
 		return
 	for cell in merchant_presentation_animations.keys():
 		if not tiles.has(cell) or not bool(tiles[cell].get("merchant_active", false)):
@@ -847,6 +895,55 @@ func _process_merchant_presentation_animations(delta: float) -> void:
 			float(merchant_presentation_animations[cell]) + delta,
 			Config.MERCHANT_PRESENTATION_DURATION
 		)
+	var finished_departures: Array[Vector2i] = []
+	for raw_cell in merchant_departure_animations.keys():
+		var cell: Vector2i = raw_cell
+		merchant_departure_animations[cell] = float(merchant_departure_animations[cell]) + delta
+		if float(merchant_departure_animations[cell]) >= 0.42:
+			finished_departures.append(cell)
+	for cell in finished_departures:
+		merchant_departure_animations.erase(cell)
+	queue_redraw()
+
+func start_divination_completion_effect(cell: Vector2i) -> void:
+	if tiles.has(cell):
+		divination_completion_animations[cell] = 0.0
+		queue_redraw()
+
+func start_divination_barracks_warning(cell: Vector2i) -> void:
+	if not tiles.has(cell) or int(tiles[cell].get("building", EMPTY)) != BARRACKS:
+		return
+	divination_barracks_warning_animations[cell] = 0.0
+	queue_redraw()
+
+func is_divination_barracks_warning_active(cell: Vector2i) -> bool:
+	return divination_barracks_warning_animations.has(cell)
+
+func _process_divination_barracks_warning_animations(delta: float) -> void:
+	if divination_barracks_warning_animations.is_empty():
+		return
+	var completed_cells: Array[Vector2i] = []
+	for raw_cell in divination_barracks_warning_animations.keys():
+		var cell: Vector2i = raw_cell
+		divination_barracks_warning_animations[cell] = float(divination_barracks_warning_animations[cell]) + delta
+		if float(divination_barracks_warning_animations[cell]) >= 1.0:
+			completed_cells.append(cell)
+	for cell in completed_cells:
+		divination_barracks_warning_animations.erase(cell)
+		divination_barracks_warning_finished.emit(cell)
+	queue_redraw()
+
+func _process_divination_completion_animations(delta: float) -> void:
+	if divination_completion_animations.is_empty():
+		return
+	var completed_cells: Array[Vector2i] = []
+	for cell in divination_completion_animations.keys():
+		divination_completion_animations[cell] = float(divination_completion_animations[cell]) + delta
+		if float(divination_completion_animations[cell]) >= Config.FATE_DIVINATION_EFFECT_DURATION:
+			completed_cells.append(cell)
+	for cell in completed_cells:
+		divination_completion_animations.erase(cell)
+		divination_effect_finished.emit(cell)
 	queue_redraw()
 
 func _can_start_merge_drag(cell: Vector2i) -> bool:
@@ -983,8 +1080,20 @@ func _draw_tile(cell: Vector2i) -> void:
 	if reveal_active:
 		var reveal_state: Dictionary = reveal_animations[cell]
 		var reveal_progress := clampf(float(reveal_state["elapsed"]) / Config.TILE_REVEAL_DURATION, 0.0, 1.0)
+		# Keep the tile airborne around the midpoint while the shorter duration
+		# makes both the takeoff and landing feel faster.
+		var airborne_span := clampf(0.30 * Config.TILE_REVEAL_AIRBORNE_SCALE, 0.0, 0.48)
+		var ascent_end := 0.5 - airborne_span * 0.5
+		var descent_start := 0.5 + airborne_span * 0.5
+		var jump_curve := 0.0
+		if reveal_progress < ascent_end:
+			jump_curve = sin(reveal_progress / ascent_end * PI * 0.5)
+		elif reveal_progress <= descent_start:
+			jump_curve = 1.0
+		else:
+			jump_curve = cos((reveal_progress - descent_start) / (1.0 - descent_start) * PI * 0.5)
 		# Overshoot on the way down gives the chunky tile a playful toy-like pop.
-		var jump_offset := sin(reveal_progress * PI) * Config.TILE_REVEAL_JUMP_HEIGHT
+		var jump_offset := jump_curve * Config.TILE_REVEAL_JUMP_HEIGHT
 		jump_offset += sin(reveal_progress * PI * 3.0) * 3.0 * (1.0 - reveal_progress)
 		var flip_scale := maxf(abs(cos(reveal_progress * PI)), Config.TILE_REVEAL_MIN_SCALE_X)
 		# Transform absolute world coordinates around this tile's center.
@@ -1013,6 +1122,15 @@ func _draw_tile(cell: Vector2i) -> void:
 		var loss_pulse := 0.5 + 0.5 * sin(card_land_loss_elapsed * 16.0)
 		draw_colored_polygon(points, Color(1.0, 0.03, 0.03, 0.18 + loss_pulse * 0.22))
 		draw_polyline(_closed_polygon(points), Color(1.0, 0.08, 0.04, 0.72 + loss_pulse * 0.26), 4.0, true)
+	if divination_barracks_warning_animations.has(cell):
+		var warning_elapsed := float(divination_barracks_warning_animations[cell])
+		var warning_pulse := 0.5 + 0.5 * sin(warning_elapsed * TAU * 5.0)
+		draw_colored_polygon(points, Color(1.0, 0.02, 0.02, 0.16 + warning_pulse * 0.20))
+		draw_polyline(_closed_polygon(points), Color(1.0, 0.08, 0.04, 0.72 + warning_pulse * 0.28), 5.0, true)
+	if cell == card_drag_target_cell:
+		var drag_color := Color("#4ade80") if card_drag_target_valid else Color("#f87171")
+		draw_colored_polygon(points, Color(drag_color.r, drag_color.g, drag_color.b, 0.16))
+		draw_polyline(_closed_polygon(points), Color(drag_color.r, drag_color.g, drag_color.b, 0.95), 4.0, true)
 
 	if not revealed:
 		if int(tile["building"]) != EMPTY:
@@ -1039,6 +1157,11 @@ func _draw_tile(cell: Vector2i) -> void:
 			draw_string(ThemeDB.fallback_font, surface_anchor + Vector2(-1.0, 24.0), str(tile_cost), HORIZONTAL_ALIGNMENT_LEFT, -1, 16, price_color)
 	else:
 		if not (cell == drag_start_cell and long_press_active):
+			if bool(tile.get("fate_event_active", false)) and int(tile.get("visible_tile_result", -1)) == Config.VISIBLE_FATE:
+				var effect_progress := -1.0
+				if divination_completion_animations.has(cell):
+					effect_progress = clampf(float(divination_completion_animations[cell]) / Config.FATE_DIVINATION_EFFECT_DURATION, 0.0, 1.0)
+				_draw_divination_house_landmark(surface_anchor, effect_progress)
 			var building_center := surface_anchor
 			if int(tile["building"]) == BARRACKS:
 				building_center += get_barracks_merge_offset(cell)
@@ -1082,7 +1205,7 @@ func _draw_tile_art(center: Vector2, texture: Texture2D) -> void:
 	# the row spacing without changing the logical hex-grid coordinates.
 	height *= TILE_ART_SCALE_Y / maxf(TILE_ART_SCALE_X, 0.001)
 	var top_offset := -54.0 * TILE_ART_SCALE_Y
-	draw_texture_rect(texture, Rect2(center + Vector2(-width * 0.5, top_offset), Vector2(width, height)), false)
+	draw_texture_rect(texture, Rect2(center + Vector2(-width * 0.5, top_offset + 7.0), Vector2(width, height)), false)
 
 func _draw_visual_anchor_debug() -> void:
 	for cell in draw_cells:
@@ -1211,20 +1334,26 @@ func _draw_tile_texture(cell: Vector2i, center: Vector2, face_color: Color, reve
 				draw_circle(point, grain_radius, Color(1.0, 0.98, 0.90, alpha))
 
 func _draw_tile_state_glow(cell: Vector2i, points: PackedVector2Array) -> void:
-	var glow_color := Color.TRANSPARENT
-	if _is_in_barracks_range(cell):
-		glow_color = Color("#ffd34e")
-	if buildable_cell_set.has(cell):
-		glow_color = Color("#65e887")
-	if mergeable_cell_set.has(cell):
-		glow_color = Color("#d795ff")
-	if glow_color.a <= 0.0:
-		return
 	var phase := float(absi(cell.x * 11 + cell.y * 7) % 13) * 0.12
 	var pulse := 0.5 + 0.5 * sin(tile_material_elapsed * 3.8 + phase)
 	var outline_points := _closed_polygon(points)
-	draw_polyline(outline_points, Color(glow_color, 0.13 + pulse * 0.12), 6.5, true)
-	draw_polyline(outline_points, Color(glow_color, 0.72 + pulse * 0.24), 2.5, true)
+
+	# Fill the whole tile for dispatch range feedback instead of drawing a
+	# competing border around every tile in the range.
+	if _is_in_barracks_range(cell):
+		draw_colored_polygon(points, Color(1.0, 0.83, 0.22, 0.10 + pulse * 0.07))
+
+	# Merge targets take priority over the range overlay and use a stronger,
+	# layered treatment so the valid destination remains obvious while dragging.
+	if mergeable_cell_set.has(cell):
+		draw_colored_polygon(points, Color(0.72, 0.36, 1.0, 0.16 + pulse * 0.10))
+		draw_polyline(outline_points, Color(0.58, 0.18, 0.92, 0.42 + pulse * 0.20), 5.0, true)
+		draw_polyline(outline_points, Color(0.90, 0.68, 1.0, 0.82 + pulse * 0.16), 2.2, true)
+		return
+
+	if buildable_cell_set.has(cell):
+		draw_polyline(outline_points, Color(0.40, 0.91, 0.53, 0.13 + pulse * 0.12), 6.5, true)
+		draw_polyline(outline_points, Color(0.40, 0.91, 0.53, 0.72 + pulse * 0.24), 2.5, true)
 
 func _draw_ellipse(center: Vector2, radii: Vector2, color: Color) -> void:
 	var points := PackedVector2Array()
@@ -1262,12 +1391,28 @@ func _draw_visible_landmark_art(center: Vector2, texture: Texture2D, width: floa
 	var height := width * texture.get_height() / maxf(1.0, texture.get_width())
 	draw_texture_rect(texture, Rect2(center + Vector2(-width * 0.5, -height * top_ratio), Vector2(width, height)), false)
 
+func _draw_divination_house_landmark(center: Vector2, effect_progress := -1.0) -> void:
+	var width := 92.0
+	_draw_ellipse(center + Vector2(0.0, 17.0), Vector2(31.0, 8.0), Color(0.0, 0.0, 0.0, 0.34))
+	_draw_visible_landmark_art(center, DIVINATION_HOUSE_ART, width, 0.78)
+	if effect_progress < 0.0:
+		return
+	var fade := 1.0 - effect_progress
+	var pulse := sin(effect_progress * PI)
+	for ring in range(3):
+		var radius := 28.0 + float(ring) * 11.0 + pulse * 8.0
+		draw_arc(center + Vector2(0.0, -4.0), radius, -PI * 0.9, PI * 0.15, 28, Color(0.72, 0.32, 1.0, fade * (0.72 - ring * 0.16)), 3.0, true)
+	for index in range(8):
+		var angle := TAU * float(index) / 8.0 + effect_progress * 2.4
+		var particle := center + Vector2(cos(angle), sin(angle) * 0.72) * (24.0 + pulse * 10.0) + Vector2(0.0, -6.0)
+		draw_circle(particle, 2.5 + pulse * 1.5, Color(0.84, 0.58, 1.0, fade))
+
 func _draw_visible_wild_level(center: Vector2, monster_level: int) -> void:
 	var level := clampi(monster_level, Config.WILD_MONSTER_LEVEL_ONE, Config.WILD_MONSTER_LEVEL_THREE)
 	var level_center := center + Vector2(45.0, -45.0)
 	draw_circle(level_center + Vector2(1.0, 1.0), 8.0, Color(0.0, 0.0, 0.0, 0.48))
-	draw_circle(level_center, 7.0, Color("#facc15"))
-	draw_string(ThemeDB.fallback_font, level_center + Vector2(-3.0, 3.5), str(level), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("#111827"))
+	draw_circle(level_center, 7.0, Art.PURPLE)
+	draw_string(ThemeDB.fallback_font, level_center + Vector2(-3.0, 3.5), str(level), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("#ffffff"))
 
 func _draw_barracks_tile_landmark(center: Vector2, use_local_transform := true) -> void:
 	var landmark_origin := center + Config.VISIBLE_LANDMARK_OFFSET
@@ -1445,8 +1590,8 @@ func _draw_wild_landmark(center: Vector2, monster_level := Config.WILD_MONSTER_L
 	var level := clampi(monster_level, Config.WILD_MONSTER_LEVEL_ONE, Config.WILD_MONSTER_LEVEL_THREE)
 	var level_center := center + Vector2(17.0, -21.0)
 	draw_circle(level_center + Vector2(1.0, 1.0), 8.0, Color(0.0, 0.0, 0.0, 0.48))
-	draw_circle(level_center, 7.0, Color("#facc15"))
-	draw_string(ThemeDB.fallback_font, level_center + Vector2(-3.0, 3.5), str(level), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("#111827"))
+	draw_circle(level_center, 7.0, Art.PURPLE)
+	draw_string(ThemeDB.fallback_font, level_center + Vector2(-3.0, 3.5), str(level), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color("#ffffff"))
 
 func _roll_visible_monster_level() -> int:
 	var roll := randf()
@@ -1554,11 +1699,23 @@ func _draw_mine_building_model(center: Vector2) -> void:
 	draw_circle(center + Vector2(12.0, -17.0), 3.0, outline)
 	draw_circle(center + Vector2(12.0, -17.0), 1.6, gold)
 
-func _draw_merchant_landmark(center: Vector2, presenting := false, presentation_progress := 0.0) -> void:
+func _draw_merchant_landmark(center: Vector2, presenting := false, presentation_progress := 0.0, cell := Vector2i(999, 999)) -> void:
+	var departure_progress := clampf(float(merchant_departure_animations.get(cell, -1.0)), 0.0, 0.42)
 	_draw_ellipse(center + Vector2(0.0, 14.0), Vector2(19.0, 5.0), Color(0.0, 0.0, 0.0, 0.25))
 	if presenting:
 		_draw_merchant_presented_cards(center, presentation_progress)
-	draw_texture_rect(MERCHANT_ART, Rect2(center + Vector2(-25.0, -33.0), Vector2(50.0, 50.0)), false)
+	var scale := 1.0
+	var alpha := 1.0
+	var lift := 0.0
+	if departure_progress > 0.0:
+		var t := departure_progress / 0.42
+		scale = lerpf(1.0, 0.25, t)
+		alpha = 1.0 - t
+		lift = lerpf(0.0, -18.0, t)
+	var texture := MERCHANT_ART
+	var width := 76.0 * scale
+	var height := width * texture.get_height() / maxf(1.0, texture.get_width())
+	draw_texture_rect(texture, Rect2(center + Vector2(-width * 0.5, 8.0 + lift - height * 0.78), Vector2(width, height)), false, Color(1.0, 1.0, 1.0, alpha))
 
 func _draw_merchant_presented_cards(center: Vector2, presentation_progress: float) -> void:
 	var progress := clampf(presentation_progress / Config.MERCHANT_PRESENTATION_DURATION, 0.0, 1.0)
@@ -1663,30 +1820,25 @@ func _draw_building(cell: Vector2i, center: Vector2, building: int, level: int, 
 		if hq_destroyed:
 			_draw_destroyed_hq(center, hq_color)
 			return
-		var hq_dark := hq_color.darkened(0.42)
 		_draw_ellipse(center + Vector2(0.0, 17.0), Vector2(26.0, 7.0), Color(0.0, 0.0, 0.0, 0.38))
-		draw_rect(Rect2(center + Vector2(-15.0, -1.0), Vector2(30.0, 20.0)), hq_dark, true)
-		draw_circle(center, 19.0, Color(hq_color, 0.25))
-		# Castle base and roof.
-		draw_rect(Rect2(center + Vector2(-15, -4), Vector2(30, 20)), hq_color, true)
-		draw_rect(Rect2(center + Vector2(-18, -8), Vector2(7, 24)), hq_color.darkened(0.18), true)
-		draw_rect(Rect2(center + Vector2(11, -8), Vector2(7, 24)), hq_color.darkened(0.18), true)
-		draw_colored_polygon(PackedVector2Array([center + Vector2(-19, -7), center + Vector2(19, -7), center + Vector2(0, -25)]), hq_color.lightened(0.18))
-		draw_rect(Rect2(center + Vector2(-4, 8), Vector2(8, 8)), Color("#08111f"), true)
-		# Small lord standing on the roof.
-		var lord_center := center + Vector2(0, -33)
-		draw_circle(lord_center + Vector2(0, -5), 5.0, Color("#f5c7a9"))
-		draw_rect(Rect2(lord_center + Vector2(-5, 1), Vector2(10, 11)), hq_color.lightened(0.28), true)
-		draw_line(lord_center + Vector2(-5, 4), lord_center + Vector2(-10, 8), Color("#f5c7a9"), 2.0, true)
-		draw_line(lord_center + Vector2(5, 4), lord_center + Vector2(10, 8), Color("#f5c7a9"), 2.0, true)
-		draw_line(lord_center + Vector2(-3, 12), lord_center + Vector2(-4, 17), Color("#0f172a"), 2.0, true)
-		draw_line(lord_center + Vector2(3, 12), lord_center + Vector2(4, 17), Color("#0f172a"), 2.0, true)
+		var headquarters_width := 88.0 * 0.80
+		var headquarters_height := headquarters_width * HEADQUARTERS_ART.get_height() / maxf(1.0, HEADQUARTERS_ART.get_width())
+		var headquarters_bottom := center + Vector2(0.0, 25.0)
+		draw_texture_rect(
+			_headquarters_art_for_faction(hq_owner),
+			Rect2(
+				Vector2(headquarters_bottom.x - headquarters_width * 0.5, headquarters_bottom.y - headquarters_height),
+				Vector2(headquarters_width, headquarters_height)
+			),
+			false
+		)
+		if hq_owner == PLAYER:
+			_draw_player_hq_identity(center, str(Config.FACTION_NAMES.get(hq_owner, "玩家")))
 		return
+
 	match building:
 		MINE:
-			var tile: Dictionary = tiles.get(cell, {})
-			var is_visible_mine := int(tile.get("tile_type", -1)) == Config.VISIBLE_TILE_TYPE and int(tile.get("visible_tile_result", -1)) == Config.VISIBLE_MINE
-			if is_visible_mine:
+			if VISIBLE_GOLD_MINE_ART != null:
 				_draw_visible_landmark_art(center, VISIBLE_GOLD_MINE_ART, 90.0, 0.62)
 			else:
 				_draw_mine_building_model(center)
@@ -1702,9 +1854,67 @@ func _draw_building(cell: Vector2i, center: Vector2, building: int, level: int, 
 			draw_line(center + Vector2(-8.0, -9.0), center + Vector2(1.0, -13.0), tower_color.lightened(0.44), 2.0, true)
 		MERCHANT:
 			var presentation_elapsed := float(merchant_presentation_animations.get(cell, -1.0))
-			_draw_merchant_landmark(center, presentation_elapsed >= 0.0, maxf(0.0, presentation_elapsed))
+			_draw_merchant_landmark(center, presentation_elapsed >= 0.0, maxf(0.0, presentation_elapsed), cell)
 		STEEL_BARRIER:
 			_draw_steel_barrier(center, _faction_building_color(int(tiles.get(cell, {}).get("owner", UNKNOWN)), Color("#94a3b8")))
+
+func _headquarters_art_for_faction(faction: int) -> Texture2D:
+	# The supplied headquarters artwork uses blue as its faction-marking color.
+	# Build tinted variants once at runtime so one neutral source serves all
+	# factions without baking four duplicate PNGs into the package.
+	if headquarters_art_cache.has(faction):
+		return headquarters_art_cache[faction]
+	if faction == UNKNOWN or not Config.FACTION_COLORS.has(faction):
+		headquarters_art_cache[faction] = HEADQUARTERS_ART
+		return HEADQUARTERS_ART
+	var source_image := HEADQUARTERS_ART.get_image()
+	if source_image == null:
+		headquarters_art_cache[faction] = HEADQUARTERS_ART
+		return HEADQUARTERS_ART
+	var target := Color(str(Config.FACTION_COLORS[faction]))
+	var tinted := source_image.duplicate()
+	for y in range(tinted.get_height()):
+		for x in range(tinted.get_width()):
+			var pixel: Color = tinted.get_pixel(x, y)
+			if pixel.a <= 0.01:
+				continue
+			# Restrict the replacement to saturated blue/cyan pixels. This keeps
+			# the castle stone, wood, skin, gold trim and their highlights intact.
+			if pixel.s < 0.18 or pixel.b <= pixel.r * 1.10 or pixel.b < pixel.g * 0.92:
+				continue
+			var target_saturation := clampf(maxf(target.s * 0.90, pixel.s * 0.58), 0.18, 1.0)
+			tinted.set_pixel(x, y, Color.from_hsv(target.h, target_saturation, pixel.v, pixel.a))
+	var texture := ImageTexture.create_from_image(tinted)
+	headquarters_art_cache[faction] = texture
+	return texture
+
+func _draw_player_hq_identity(center: Vector2, player_name: String) -> void:
+	# Keep the identity badge above the headquarters silhouette so its frame never
+	# covers the roof or other faction-identifying details.
+	var badge_center := center + Vector2(0.0, -88.0)
+	var badge_width := 74.0
+	var badge_height := 22.0
+	var badge_rect := Rect2(badge_center - Vector2(badge_width, badge_height) * 0.5, Vector2(badge_width, badge_height))
+	var faction_color := _faction_color(PLAYER, Color("#38bff2"))
+	var panel_color := Color(0.04, 0.08, 0.14, 0.62)
+	var outline_color := Color(0.02, 0.04, 0.08, 0.78)
+	draw_style_box(_identity_badge_style(panel_color, outline_color), badge_rect)
+	var avatar_center := badge_center + Vector2(-25.0, 0.0)
+	draw_circle(avatar_center + Vector2(0.0, -3.0), 6.5, outline_color)
+	draw_circle(avatar_center + Vector2(0.0, -3.0), 4.7, faction_color.lightened(0.12))
+	draw_colored_polygon(PackedVector2Array([
+		avatar_center + Vector2(-7.0, 2.0), avatar_center + Vector2(7.0, 2.0),
+		avatar_center + Vector2(5.0, 7.0), avatar_center + Vector2(-5.0, 7.0)
+	]), faction_color.darkened(0.12))
+	draw_string(ThemeDB.fallback_font, badge_center + Vector2(-11.0, 4.5), player_name, HORIZONTAL_ALIGNMENT_LEFT, 48.0, 12, Color("#f8fafc"))
+
+func _identity_badge_style(background: Color, outline: Color) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = background
+	style.border_color = outline
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(7)
+	return style
 
 func _draw_destroyed_hq(center: Vector2, faction_color: Color) -> void:
 	var rubble := faction_color.darkened(0.48).lerp(Color("#475569"), 0.45)
@@ -1783,8 +1993,7 @@ func _draw_barracks_model(center: Vector2, level: int, unit_class: int, can_merg
 	if _has_barracks_art(unit_class, faction):
 		if can_merge:
 			var art_pulse := 0.5 + 0.5 * sin(mergeable_effect_elapsed * 5.0)
-			draw_circle(model_center + Vector2(0.0, -5.0), 27.0 * scale, Color(1.0, 0.78, 0.22, 0.045 + art_pulse * 0.035))
-			draw_arc(model_center + Vector2(0.0, -5.0), 25.0 * scale, -PI * 0.5, TAU - PI * 0.5, 32, Color(1.0, 0.78, 0.22, 0.30 + art_pulse * 0.30), 2.0, true)
+			_draw_barracks_upgrade_hint(model_center, scale, art_pulse)
 		_draw_ellipse(model_center + Vector2(0.0, 17.0 * scale), Vector2(22.0, 5.0) * scale, Color(0.0, 0.0, 0.0, 0.30))
 		_draw_barracks_art_model(model_center, scale, unit_class, faction)
 		_draw_barracks_level_badge(model_center, scale, tier, accent_color, trim_color)
@@ -1828,8 +2037,7 @@ func _draw_barracks_model(center: Vector2, level: int, unit_class: int, can_merg
 
 	if can_merge:
 		var pulse := 0.5 + 0.5 * sin(mergeable_effect_elapsed * 5.0)
-		draw_circle(model_center + Vector2(0.0, -5.0), 27.0 * scale, Color(1.0, 0.78, 0.22, 0.045 + pulse * 0.035))
-		draw_arc(model_center + Vector2(0.0, -5.0), 25.0 * scale, -PI * 0.5, TAU - PI * 0.5, 32, Color(1.0, 0.78, 0.22, 0.30 + pulse * 0.30), 2.0, true)
+		_draw_barracks_upgrade_hint(model_center, scale, pulse)
 	_draw_ellipse(model_center + Vector2(0.0, 17.0 * scale), Vector2(22.0, 5.0) * scale, Color(0.0, 0.0, 0.0, 0.30))
 	match tier:
 		1:
@@ -1847,9 +2055,23 @@ func _draw_barracks_model(center: Vector2, level: int, unit_class: int, can_merg
 	draw_circle(model_center + Vector2(0.0, 9.0 * scale), 3.0 * scale, trim_color)
 	# A separate badge makes the building tier readable at a glance.
 	var level_badge_center := model_center + Vector2(19.0, 14.0) * scale
-	draw_circle(level_badge_center, 8.0 * scale, Color("#172033"))
-	draw_circle(level_badge_center, 6.0 * scale, accent_color)
+	draw_rect(Rect2(level_badge_center - Vector2(8.0, 8.0) * scale, Vector2(16.0, 16.0) * scale), Color("#172033"), true)
+	draw_rect(Rect2(level_badge_center - Vector2(6.0, 6.0) * scale, Vector2(12.0, 12.0) * scale), accent_color, true)
 	draw_string(ThemeDB.fallback_font, level_badge_center + Vector2(-3.2 * scale, 3.5 * scale), str(tier), HORIZONTAL_ALIGNMENT_LEFT, -1, int(10.0 * scale), Color("#172033"))
+
+func _draw_barracks_upgrade_hint(center: Vector2, scale: float, pulse: float) -> void:
+	if BARRACKS_UPGRADE_HINT_TEXTURE == null:
+		return
+	var width := 27.0 * scale
+	var height := width * BARRACKS_UPGRADE_HINT_TEXTURE.get_height() / maxf(1.0, BARRACKS_UPGRADE_HINT_TEXTURE.get_width())
+	var alpha := 0.72 + pulse * 0.28
+	var hint_center := center + Vector2(0.0, -38.0 * scale)
+	draw_texture_rect(
+		BARRACKS_UPGRADE_HINT_TEXTURE,
+		Rect2(hint_center - Vector2(width, height) * 0.5, Vector2(width, height)),
+		false,
+		Color(1.0, 1.0, 1.0, alpha)
+	)
 
 func _barracks_art_for_faction(faction: int) -> Texture2D:
 	match faction:
@@ -1886,8 +2108,8 @@ func _draw_barracks_level_badge(center: Vector2, scale: float, tier: int, accent
 	draw_circle(center + Vector2(0.0, 11.0 * scale), 4.0 * scale, Color(0.0, 0.0, 0.0, 0.28))
 	draw_circle(center + Vector2(0.0, 9.0 * scale), 3.0 * scale, trim_color)
 	var level_badge_center := center + Vector2(19.0, 14.0) * scale
-	draw_circle(level_badge_center, 8.0 * scale, Color("#172033"))
-	draw_circle(level_badge_center, 6.0 * scale, accent_color)
+	draw_rect(Rect2(level_badge_center - Vector2(8.0, 8.0) * scale, Vector2(16.0, 16.0) * scale), Color("#172033"), true)
+	draw_rect(Rect2(level_badge_center - Vector2(6.0, 6.0) * scale, Vector2(12.0, 12.0) * scale), accent_color, true)
 	draw_string(ThemeDB.fallback_font, level_badge_center + Vector2(-3.2 * scale, 3.5 * scale), str(tier), HORIZONTAL_ALIGNMENT_LEFT, -1, int(10.0 * scale), Color("#172033"))
 
 func _draw_barracks_class_signature(center: Vector2, scale: float, unit_class: int, base: Color, dark: Color, light: Color, accent: Color) -> void:

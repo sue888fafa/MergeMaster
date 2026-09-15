@@ -1,4 +1,4 @@
-[gd_scene load_steps=8 format=3]
+[gd_scene load_steps=10 format=3]
 
 [ext_resource type="Script" path="res://main.gd" id="1_main"]
 [ext_resource type="Script" path="res://hex_board.gd" id="2_board"]
@@ -8,6 +8,7 @@
 [ext_resource type="Script" path="res://hud.gd" id="6_hud"]
 [ext_resource type="Script" path="res://bombardment_effect.gd" id="7_bombardment"]
 [ext_resource type="Script" path="res://unit_visual_layer.gd" id="8_unit_visual_layer"]
+[ext_resource type="Resource" path="res://ui_editor_config.tres" id="9_ui_config"]
 [node name="Main" type="Node2D"]
 script = ExtResource("1_main")
 
@@ -41,3 +42,4 @@ script = ExtResource("5_ai")
 
 [node name="HUD" type="CanvasLayer" parent="."]
 script = ExtResource("6_hud")
+ui_config = ExtResource("9_ui_config")

@@ -19,8 +19,9 @@ const UNIT_MASKS: Array[Texture2D] = [
 ]
 # Atlas-cell order follows the authored six-direction strip. The second and
 # fifth cells are the two diagonal views whose visual labels are opposite to
-# their logical movement names, so the movement vectors are intentionally
-# paired with those cells explicitly below.
+# their logical movement names, so the movement vectors are paired explicitly
+# with the authored cells below. Keep this mapping in sync with the direction
+# test and the runtime atlas assets.
 const DIRECTION_VECTORS: Array[Vector2] = [
 	Vector2(0.5, 0.8660254038),
 	Vector2(0.5, -0.8660254038),
@@ -188,7 +189,7 @@ func dispatch_from_barracks() -> void:
 func move_to_garrison_door(delta: float) -> void:
 	if main_ref == null:
 		return
-	var target_position: Vector2 = main_ref.board.axial_to_world(home_cell) + Config.BARRACKS_GARRISON_OFFSET
+	var target_position: Vector2 = main_ref.get_barracks_garrison_position(home_cell, self) if main_ref.has_method("get_barracks_garrison_position") else main_ref.board.axial_to_world(home_cell) + Config.BARRACKS_GARRISON_OFFSET
 	var previous_position := position
 	position = position.move_toward(target_position, move_speed * delta)
 	_update_visual_direction(position - previous_position)
@@ -259,17 +260,17 @@ func take_damage(amount: float, _attacker: Node = null) -> void:
 func _draw() -> void:
 	if batch_rendered:
 		return
-	var visual_scale: float = float(Config.UNIT_LEVEL_VISUAL_SCALE[clampi(barracks_level, 1, 4) - 1])
+	var visual_scale: float = float(Config.UNIT_LEVEL_VISUAL_SCALE[clampi(barracks_level, 1, 4) - 1]) * Config.UNIT_DISPLAY_SCALE
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2(visual_scale, visual_scale))
 	var body: Color = main_ref.get_faction_color(faction) if main_ref != null and main_ref.has_method("get_faction_color") else (Color("#38bdf8") if faction == 1 else Color("#ef4444"))
-	# Generated chibi sprite replaces the former stick-figure placeholder. A
-	# faction-color halo preserves instant team recognition at board scale.
+	# Generated chibi sprite replaces the former stick-figure placeholder. The
+	# shader preserves source luminance while the small halo provides only a
+	# secondary faction cue.
 	var outline := Color("#293452")
 	# A compact ground shadow anchors the soldier to the tile and remains
 	# independent of the facing direction.
-	_draw_unit_ellipse(Vector2(2.0, 15.0), Vector2(14.0, 5.5), Color(0.02, 0.04, 0.08, 0.48))
-	draw_circle(Vector2(0.0, -1.0), 18.0, Color(body, 0.42))
-	draw_circle(Vector2(0.0, -1.0), 15.5, Color(1.0, 1.0, 1.0, 0.48))
+	_draw_unit_ellipse(Vector2(2.0, 15.0), Vector2(14.0, 5.5), Color(0.26, 0.17, 0.22, 0.48))
+	draw_circle(Vector2(0.0, -1.0), 15.5, Color(body, 0.16))
 	var sprite_index := clampi(unit_class, 0, UNIT_ART.size() - 1)
 	_update_legacy_sprite(sprite_index, visual_scale)
 	if is_frozen():
@@ -278,7 +279,8 @@ func _draw() -> void:
 		draw_line(Vector2(7.0, -21.0), Vector2(13.0, -15.0), Color("#cffafe"), 2.0, true)
 	if hp < max_hp:
 		draw_rect(Rect2(-12, -17, 24, 3), Color("#0f172a"), true)
-		draw_rect(Rect2(-12, -17, 24 * clamp(hp / max_hp, 0.0, 1.0), 3), Color("#4ade80"), true)
+		var health_fill_color := Color("#4ade80") if faction == Config.FACTION_PLAYER else Color("#ef4444")
+		draw_rect(Rect2(-12, -17, 24 * clamp(hp / max_hp, 0.0, 1.0), 3), health_fill_color, true)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 func _setup_legacy_sprite() -> void:
@@ -310,11 +312,12 @@ func _update_legacy_sprite(sprite_index: int, visual_scale: float) -> void:
 	# The legacy fallback has one front-facing image per class. Mirror it for
 	# the left-facing atlas directions so it still follows horizontal travel;
 	# the batch renderer uses the full six-direction runtime atlas.
-	legacy_sprite.flip_h = visual_direction == 2 or visual_direction == 4
-	legacy_sprite.modulate = main_ref.get_faction_color(faction) if main_ref != null and main_ref.has_method("get_faction_color") else Color.WHITE
+	_apply_legacy_facing()
+	legacy_sprite.modulate = Color.WHITE
 	var material := legacy_sprite.material as ShaderMaterial
 	if material != null:
 		material.set_shader_parameter("faction_mask", UNIT_MASKS[sprite_index])
+		material.set_shader_parameter("faction_tint", main_ref.get_faction_color(faction) if main_ref != null and main_ref.has_method("get_faction_color") else Color.WHITE)
 
 func get_visual_animation() -> String:
 	return visual_action if visual_action_remaining > 0.0 else ("move" if moving else "idle")
@@ -324,6 +327,17 @@ func get_visual_direction() -> int:
 
 func get_visual_elapsed() -> float:
 	return visual_elapsed
+
+func face_toward(target_position: Vector2) -> void:
+	var direction := target_position - position
+	if direction.length_squared() < 0.0001:
+		return
+	var previous_direction := visual_direction
+	visual_direction = direction_frame_for_movement(direction)
+	if legacy_sprite != null:
+		_apply_legacy_facing()
+	if visual_direction != previous_direction:
+		queue_redraw()
 
 static func direction_frame_for_movement(movement: Vector2) -> int:
 	if movement.length_squared() < 0.0001:
@@ -343,10 +357,17 @@ func _update_visual_direction(movement: Vector2) -> void:
 		return
 	var previous_direction := visual_direction
 	visual_direction = direction_frame_for_movement(movement)
+	if legacy_sprite != null:
+		_apply_legacy_facing()
 	if visual_direction != previous_direction:
-		if legacy_sprite != null:
-			legacy_sprite.flip_h = visual_direction == 2 or visual_direction == 4
 		queue_redraw()
+
+func _apply_legacy_facing() -> void:
+	if legacy_sprite == null:
+		return
+	# The single-image fallback can only mirror horizontal-facing views. Include
+	# the upper-left frame as well; omitting it made that direction face right.
+	legacy_sprite.flip_h = visual_direction == 2 or visual_direction == 3 or visual_direction == 4
 
 func _draw_unit_ellipse(center: Vector2, radii: Vector2, color: Color) -> void:
 	var points := PackedVector2Array()

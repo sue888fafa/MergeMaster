@@ -99,6 +99,7 @@ const FATE_DIVINATION_EVENT_COUNT := 6
 const FATE_DIVINATION_ROLL_DURATION := 1.5
 const FATE_DIVINATION_TARGET_ROLL_DURATION := 0.8
 const FATE_DIVINATION_RESULT_DURATION := 0.75
+const FATE_DIVINATION_EFFECT_DURATION := 0.55
 const FATE_DIVINATION_CAMERA_MOVE_DURATION := 0.30
 const FATE_DIVINATION_CAMERA_HOLD_DURATION := 1.0
 const FATE_DIVINATION_CAMERA_RETURN_DURATION := 0.30
@@ -145,7 +146,7 @@ const UNIT_CLASS_RACES := [
 const UNIT_CLASS_BASE_HP := [80.0, 50.0, 35.0, 25.0, 24.0]
 const UNIT_CLASS_BASE_ATTACK := [8.0, 10.0, 25.0, 18.0, 7.0]
 const UNIT_CLASS_ATTACK_INTERVAL := [3.5, 3.0, 4.5, 2.2, 1.5]
-const UNIT_CLASS_ATTACK_RANGE := [0.1, 0.1, 1.4, 0.1, 1.4]
+const UNIT_CLASS_ATTACK_RANGE := [0.06, 0.06, 1.26, 0.06, 1.428]
 const UNIT_CLASS_IS_RANGED := [false, false, true, false, true]
 
 static func get_unit_class_race(unit_class: int) -> int:
@@ -224,6 +225,8 @@ const UNIT_BASE_MOVE_SPEED := 36.0
 const UNIT_LEVEL_MOVE_INCREMENT := 2.0
 const UNIT_SPEED_SCALE := 0.5
 const UNIT_LEVEL_VISUAL_SCALE := [1.0, 1.35, 1.8, 2.16]
+# Apply the requested 80% reduction to the already reduced unit presentation.
+const UNIT_DISPLAY_SCALE := 0.64
 const MAX_ACTIVE_UNITS_PER_FACTION := 100
 const UNIT_TARGET_REFRESH_INTERVAL := 0.20
 
@@ -258,7 +261,9 @@ const BARRACKS_MERGE_HEIGHT := 120.0
 const BARRACKS_MERGE_BOUNCE_HEIGHT := 8.0
 # Reveal presentation is intentionally snappy while retaining the same timing
 # relationship between the flip midpoint and the landing.
-const TILE_REVEAL_DURATION := 0.5 / 1.3
+const TILE_REVEAL_SPEED_SCALE := 1.2
+const TILE_REVEAL_AIRBORNE_SCALE := 1.2
+const TILE_REVEAL_DURATION := (0.5 / 1.3) / TILE_REVEAL_SPEED_SCALE
 const TILE_REVEAL_JUMP_HEIGHT := 24.0 * 1.3
 const TILE_REVEAL_MIN_SCALE_X := 0.04
 const CARD_LAND_LOSS_CAMERA_DURATION := 0.3

@@ -1,0 +1,61 @@
+[gd_scene format=3 uid="uid://cmp28lodbmsra"]
+
+[sub_resource type="StyleBoxFlat" id="StylePanel"]
+bg_color = Color(0.12, 0.15, 0.22, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.38, 0.45, 0.58, 1)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_right = 12
+corner_radius_bottom_left = 12
+shadow_color = Color(0, 0, 0, 0.35)
+shadow_size = 10
+
+[node name="DefeatUI" type="Control" unique_id=441916985]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="DefeatPanel" type="Panel" parent="." unique_id=263747299]
+layout_mode = 0
+offset_right = 620.0
+offset_bottom = 280.0
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StylePanel")
+
+[node name="Message" type="Label" parent="DefeatPanel" unique_id=653187687]
+layout_mode = 0
+offset_left = 20.0
+offset_top = 44.0
+offset_right = 600.0
+offset_bottom = 154.0
+theme_override_colors/font_color = Color(0.92, 0.94, 0.98, 1)
+theme_override_font_sizes/font_size = 30
+text = "主城已破！"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="RestartButton" type="Button" parent="DefeatPanel" unique_id=613897455]
+layout_mode = 0
+offset_left = 146.0
+offset_top = 190.0
+offset_right = 306.0
+offset_bottom = 234.0
+theme_override_font_sizes/font_size = 18
+text = "立即结算"
+
+[node name="SpectateButton" type="Button" parent="DefeatPanel" unique_id=1755581822]
+layout_mode = 0
+offset_left = 324.0
+offset_top = 190.0
+offset_right = 474.0
+offset_bottom = 234.0
+theme_override_font_sizes/font_size = 18
+text = "继续观战"

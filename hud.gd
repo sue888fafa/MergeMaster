@@ -10,8 +10,18 @@ const CameraGuideIconScript := preload("res://camera_guide_icon.gd")
 const CatCompanionScript := preload("res://cat_companion.gd")
 const MerchantCardIconScript := preload("res://merchant_card_icon.gd")
 const MerchantShopArtScript := preload("res://merchant_shop_art.gd")
+const MerchantShopUIScript := preload("res://merchant_shop_ui.gd")
 const DivinationHouseArtScript := preload("res://divination_house_art.gd")
+const DivinationTargetDisplayScript := preload("res://divination_target_display.gd")
 const FactionStatsDisplayScript := preload("res://faction_stats_display.gd")
+const FactionAvatarScript := preload("res://faction_avatar.gd")
+const SettlementUIScript := preload("res://settlement_ui.gd")
+const GOLD_ICON := preload("res://assets/generated/ui/coin.png")
+const CASTLE_INFO_ICON := preload("res://assets/generated/ui/castle_info.png")
+const BATTLE_HUD_PREVIEW_SCENE := preload("res://BattleHUDPreview.tscn")
+
+@export_category("UI编辑")
+@export var ui_config: UIEditorConfig = preload("res://ui_editor_config.tres")
 
 signal card_event_finished(owner: int, card_type: int, fate_cell: Vector2i)
 signal card_draw_finished(owner: int, card_id: String, fate_cell: Vector2i)
@@ -20,10 +30,16 @@ signal merchant_arrival_finished(cell: Vector2i)
 signal merchant_item_selected(index: int)
 signal merchant_dismissed
 signal inventory_item_dropped(item_id: String, screen_position: Vector2)
+signal inventory_item_dragged(item_id: String, screen_position: Vector2)
+signal inventory_item_drag_ended(item_id: String, screen_position: Vector2, was_dragged: bool)
 
 var main_ref: Node
 var status_label: Label
 var stats_label: Label
+var gold_icon: TextureRect
+var gold_panel: Panel
+var authored_hud_layout: Dictionary = {}
+var authored_hud_styles: Dictionary = {}
 var fps_label: Label
 var army_label: Label
 var faction_stats_display: Control
@@ -34,15 +50,18 @@ var hint_container: Control
 var hint_messages: Array[String] = []
 var bombardment_banner: ColorRect
 var bombardment_banner_label: Label
+var broadcast_faction_avatar: Control
 var bombardment_banner_message := ""
 var world_broadcast_message := ""
 var world_broadcast_remaining := 0.0
+var world_broadcast_faction := -1
 var cat_companion: CatCompanion
 var end_panel: Panel
 var end_label: Label
 var restart_button: Button
 var spectate_button: Button
 var watch_mode_button: Button
+var settlement_ui: Control
 var player_info_button: Button
 var bottom_status_panel: ColorRect
 var player_info_overlay: ColorRect
@@ -69,10 +88,15 @@ var card_event_title: Label
 var card_event_card: Label
 var card_event_detail: Label
 var card_draw_result_icon: Control
+var card_draw_confirm_button: Button
+var card_draw_countdown_label: Label
+var card_draw_countdown_remaining := 0.0
 var divination_overlay: ColorRect
+var divination_root: Control
 var divination_panel: Panel
 var divination_title: Label
 var divination_target: Label
+var divination_target_display: DivinationTargetDisplay
 var divination_event_label: Label
 var divination_result: Label
 var divination_event_icons: Array[Label] = []
@@ -103,13 +127,16 @@ var equipment_replacement_panel: Panel
 var equipment_replacement_title: Label
 var equipment_replacement_current_icon: TextureRect
 var equipment_replacement_new_icon: TextureRect
+var equipment_recommendation_badge: Panel
+var equipment_recommendation_label: Label
 var equipment_replacement_current_label: Label
 var equipment_replacement_new_label: Label
 var equipment_replace_button: Button
 var equipment_discard_button: Button
-var merchant_shop_overlay: ColorRect
+var merchant_shop_overlay: Control
 var merchant_shop_panel: Panel
 var merchant_shop_title: Label
+var merchant_shop_gold_label: Label
 var merchant_shop_art: Control
 var merchant_shop_buttons: Array[Button] = []
 var merchant_shop_card_icons: Array[Control] = []
@@ -145,9 +172,15 @@ const PERSONAL_HINT_MAX_LINES := 4
 
 func setup(controller: Node) -> void:
 	main_ref = controller
+	Art.configure_ui(ui_config)
 	_build_ui()
 
 func _process(delta: float) -> void:
+	if card_event_running and not card_event_current.is_empty() and bool(card_event_current.get("is_card_draw", false)):
+		card_draw_countdown_remaining = maxf(0.0, card_draw_countdown_remaining - delta)
+		_update_card_draw_countdown_label()
+		if card_draw_countdown_remaining <= 0.0:
+			_finish_card_draw()
 	fps_refresh_timer -= delta
 	if fps_refresh_timer <= 0.0:
 		fps_refresh_timer = FPS_REFRESH_INTERVAL
@@ -156,6 +189,7 @@ func _process(delta: float) -> void:
 		world_broadcast_remaining = maxf(0.0, world_broadcast_remaining - delta)
 		if world_broadcast_remaining <= 0.0:
 			world_broadcast_message = ""
+			world_broadcast_faction = -1
 			_refresh_broadcast_banner()
 	camera_guide_refresh_timer -= delta
 	if camera_guide_refresh_timer <= 0.0:
@@ -164,28 +198,30 @@ func _process(delta: float) -> void:
 
 func _build_ui() -> void:
 	viewport_size = get_viewport().get_visible_rect().size
+	# GoldPanel is authored in BattleHUDPreview.tscn so its background and any
+	# child decoration remain editable in the Godot scene editor. The runtime
+	# HUD copies that authored node and only supplies live gold data separately.
+	var preview_instance := BATTLE_HUD_PREVIEW_SCENE.instantiate()
+	_capture_authored_hud_layout(preview_instance)
+	var authored_gold_panel := preview_instance.get_node_or_null("GoldPanel") as Panel
+	if authored_gold_panel != null:
+		gold_panel = authored_gold_panel.duplicate() as Panel
+		gold_panel.name = "GoldPanel"
+		gold_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		gold_panel.z_index = 0
+		add_child(gold_panel)
+	preview_instance.free()
 	player_info_button = Button.new()
-	player_info_button.text = "♟"
-	player_info_button.tooltip_text = "主角信息"
+	player_info_button.text = ""
+	player_info_button.tooltip_text = "城堡信息"
+	player_info_button.icon = CASTLE_INFO_ICON
+	player_info_button.expand_icon = true
 	player_info_button.position = Vector2(16, 78)
 	player_info_button.size = Vector2(48, 48)
 	player_info_button.add_theme_font_size_override("font_size", 26)
 	player_info_button.add_theme_color_override("font_color", Color("#f8fafc"))
 	player_info_button.add_theme_color_override("font_hover_color", Color("#ffffff"))
-	var button_normal := StyleBoxFlat.new()
-	button_normal.bg_color = Art.SUN
-	button_normal.border_color = Art.INK
-	button_normal.set_border_width_all(3)
-	button_normal.set_corner_radius_all(24)
-	button_normal.shadow_color = Art.SHADOW
-	button_normal.shadow_size = 5
-	button_normal.shadow_offset = Vector2(0, 4)
-	var button_hover := button_normal.duplicate()
-	button_hover.bg_color = Color("#ffe989")
-	button_hover.border_color = Art.INK
-	player_info_button.add_theme_stylebox_override("normal", button_normal)
-	player_info_button.add_theme_stylebox_override("hover", button_hover)
-	player_info_button.add_theme_stylebox_override("pressed", button_hover)
+	Art.apply_flat_button(player_info_button, Art.POPUP_ACCENT)
 	player_info_button.pressed.connect(_toggle_player_info)
 	add_child(player_info_button)
 
@@ -203,6 +239,15 @@ func _build_ui() -> void:
 	stats_label.add_theme_constant_override("outline_size", 3)
 	stats_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(stats_label)
+
+	gold_icon = TextureRect.new()
+	gold_icon.name = "GoldIcon"
+	gold_icon.texture = ui_config.battle_gold_icon_texture if ui_config != null and ui_config.battle_gold_icon_texture != null else GOLD_ICON
+	gold_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	gold_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	gold_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	gold_icon.z_index = 1
+	add_child(gold_icon)
 
 	fps_label = Label.new()
 	fps_label.name = "FpsLabel"
@@ -239,6 +284,7 @@ func _build_ui() -> void:
 	faction_stats_display = FactionStatsDisplayScript.new()
 	faction_stats_display.name = "FactionStatsDisplay"
 	faction_stats_display.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	faction_stats_display.call("configure_ui", ui_config)
 	add_child(faction_stats_display)
 
 	hq_health_bar = ProgressBar.new()
@@ -279,6 +325,11 @@ func _build_ui() -> void:
 	bombardment_banner_label.add_theme_font_size_override("font_size", 19)
 	bombardment_banner_label.add_theme_color_override("font_color", Color("#fee2e2"))
 	bombardment_banner.add_child(bombardment_banner_label)
+	broadcast_faction_avatar = FactionAvatarScript.new()
+	broadcast_faction_avatar.name = "BroadcastFactionAvatar"
+	broadcast_faction_avatar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	broadcast_faction_avatar.visible = false
+	bombardment_banner.add_child(broadcast_faction_avatar)
 
 	building_damage_edge_soft = Panel.new()
 	building_damage_edge_soft.name = "BuildingDamageEdgeSoftFlash"
@@ -326,38 +377,18 @@ func _build_ui() -> void:
 			hint_label = line
 	_render_hint_history()
 
-	end_panel = Panel.new()
-	end_panel.add_theme_stylebox_override("panel", Art.panel_style(Art.PANEL, Art.INK, 26, 4))
-	end_panel.size = Vector2(minf(viewport_size.x * 0.85, 620.0), 280.0)
-	end_panel.position = Vector2((viewport_size.x - end_panel.size.x) * 0.5, (viewport_size.y - end_panel.size.y) * 0.5)
-	end_panel.visible = false
-	add_child(end_panel)
-
-	end_label = Label.new()
-	end_label.position = Vector2(20, 30)
-	end_label.size = Vector2(end_panel.size.x - 40, 110)
-	end_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	end_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	end_label.add_theme_font_size_override("font_size", 30)
-	end_label.add_theme_color_override("font_color", Art.INK)
-	end_panel.add_child(end_label)
-
-	restart_button = Button.new()
-	restart_button.text = "再来一局"
-	restart_button.position = Vector2((end_panel.size.x - 160) * 0.5, 190)
-	restart_button.size = Vector2(160, 44)
-	restart_button.add_theme_font_size_override("font_size", 18)
+	var defeat_scene := preload("res://DefeatUI.tscn")
+	var defeat_ui: Control = defeat_scene.instantiate()
+	defeat_ui.name = "DefeatOverlay"
+	defeat_ui.visible = false
+	add_child(defeat_ui)
+	end_panel = defeat_ui.get_node("DefeatPanel") as Panel
+	end_panel.add_theme_stylebox_override("panel", Art.flat_panel_style(Art.POPUP_BACKGROUND_ALT, Art.POPUP_ACCENT))
+	end_label = defeat_ui.get_node("DefeatPanel/Message") as Label
+	restart_button = defeat_ui.get_node("DefeatPanel/RestartButton") as Button
+	spectate_button = defeat_ui.get_node("DefeatPanel/SpectateButton") as Button
 	restart_button.pressed.connect(_on_restart_pressed)
-	end_panel.add_child(restart_button)
-
-	spectate_button = Button.new()
-	spectate_button.text = "继续观战"
-	spectate_button.position = Vector2(end_panel.size.x * 0.5 + 10.0, 190)
-	spectate_button.size = Vector2(150, 44)
-	spectate_button.add_theme_font_size_override("font_size", 18)
 	spectate_button.pressed.connect(_on_spectate_pressed)
-	spectate_button.visible = false
-	end_panel.add_child(spectate_button)
 
 	watch_mode_button = Button.new()
 	watch_mode_button.name = "WatchModeExitButton"
@@ -375,6 +406,17 @@ func _build_ui() -> void:
 	_build_divination_panel()
 	_build_intelligence_news_panel()
 	_apply_cartoon_buttons(self)
+	_apply_flat_popup_theme()
+	_apply_battle_hud_style()
+	_apply_authored_battle_hud_styles()
+	_layout_ui()
+	settlement_ui = SettlementUIScript.new()
+	settlement_ui.name = "SettlementUI"
+	settlement_ui.visible = false
+	settlement_ui.z_index = 100
+	add_child(settlement_ui)
+	settlement_ui.call("configure_ui", ui_config)
+	settlement_ui.connect("confirmed", _on_settlement_confirmed)
 	_layout_ui()
 	update_camera_guides()
 
@@ -388,9 +430,17 @@ func _build_cat_companion() -> void:
 	add_child(cat_companion)
 	cat_companion.set_viewport_size(viewport_size)
 	cat_companion.inventory_item_dropped.connect(_on_cat_inventory_item_dropped)
+	cat_companion.inventory_item_dragged.connect(_on_cat_inventory_item_dragged)
+	cat_companion.inventory_item_drag_ended.connect(_on_cat_inventory_item_drag_ended)
 
 func _on_cat_inventory_item_dropped(item_id: String, screen_position: Vector2) -> void:
 	inventory_item_dropped.emit(item_id, screen_position)
+
+func _on_cat_inventory_item_dragged(item_id: String, screen_position: Vector2) -> void:
+	inventory_item_dragged.emit(item_id, screen_position)
+
+func _on_cat_inventory_item_drag_ended(item_id: String, screen_position: Vector2, was_dragged: bool) -> void:
+	inventory_item_drag_ended.emit(item_id, screen_position, was_dragged)
 
 func play_card_draw(owner: int, card_id: String, fate_cell: Vector2i) -> void:
 	card_event_queue.append({"owner": owner, "card_id": card_id, "fate_cell": fate_cell, "is_card_draw": true})
@@ -425,105 +475,50 @@ func hide_officer_bubble() -> void:
 func reset_cat_companion() -> void:
 	if cat_companion == null:
 		return
+	cat_companion.cancel_item_drag()
 	cat_companion.hide_bubble()
 	cat_companion.set_expanded(false)
 
 func _build_merchant_shop_panel() -> void:
-	merchant_shop_overlay = ColorRect.new()
-	merchant_shop_overlay.name = "MerchantShopOverlay"
-	merchant_shop_overlay.color = Color(0.01, 0.03, 0.07, 0.80)
-	merchant_shop_overlay.position = Vector2.ZERO
-	merchant_shop_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
-	merchant_shop_overlay.visible = false
-	add_child(merchant_shop_overlay)
-
-	merchant_shop_panel = Panel.new()
-	merchant_shop_panel.name = "MerchantShopPanel"
-	merchant_shop_panel.add_theme_stylebox_override("panel", Art.panel_style(Art.PANEL, Art.INK, 28, 4))
-	merchant_shop_overlay.add_child(merchant_shop_panel)
-
-	merchant_shop_title = Label.new()
-	merchant_shop_title.text = "商人商店"
-	merchant_shop_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	merchant_shop_title.add_theme_font_size_override("font_size", 28)
-	merchant_shop_title.add_theme_color_override("font_color", Art.INK)
-	merchant_shop_panel.add_child(merchant_shop_title)
-
-	merchant_shop_art = MerchantShopArtScript.new()
-	merchant_shop_art.name = "MerchantShopArt"
-	merchant_shop_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	merchant_shop_panel.add_child(merchant_shop_art)
-
+	var shop_scene := preload("res://MerchantShopUI.tscn")
+	var shop_ui: MerchantShopUI = shop_scene.instantiate()
+	if shop_ui == null:
+		push_error("无法实例化 MerchantShopUI.tscn，商店界面将不可用。")
+		return
+	shop_ui.name = "MerchantShopOverlay"
+	shop_ui.visible = false
+	add_child(shop_ui)
+	merchant_shop_overlay = shop_ui
+	shop_ui.call("configure_ui", ui_config)
+	merchant_shop_panel = shop_ui.get_node("MerchantShopPanel")
+	merchant_shop_title = shop_ui.get_node("MerchantShopPanel/MerchantShopTitle")
+	merchant_shop_gold_label = shop_ui.get_node("MerchantShopPanel/MerchantShopGold")
+	merchant_shop_art = shop_ui.get_node("MerchantShopPanel/MerchantShopArt")
 	for index in range(3):
-		var item_button := Button.new()
-		item_button.name = "MerchantItem%d" % index
-		item_button.focus_mode = Control.FOCUS_NONE
-		item_button.text = ""
-		item_button.pressed.connect(_on_merchant_shop_item_pressed.bind(index))
-		merchant_shop_panel.add_child(item_button)
+		var item_button: Button = shop_ui.get_node("MerchantShopPanel/MerchantItem%d" % index)
 		merchant_shop_buttons.append(item_button)
-
-		var card_icon: Control = MerchantCardIconScript.new()
-		card_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		item_button.add_child(card_icon)
-		merchant_shop_card_icons.append(card_icon)
-
-		var card_title := Label.new()
-		card_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		card_title.add_theme_font_size_override("font_size", 17)
-		card_title.add_theme_color_override("font_color", Art.INK)
-		card_title.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		item_button.add_child(card_title)
-		merchant_shop_card_titles.append(card_title)
-
-		var card_description := Label.new()
-		card_description.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		card_description.vertical_alignment = VERTICAL_ALIGNMENT_TOP
-		card_description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		card_description.add_theme_font_size_override("font_size", 13)
-		card_description.add_theme_color_override("font_color", Art.INK_SOFT)
-		card_description.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		item_button.add_child(card_description)
-		merchant_shop_card_descriptions.append(card_description)
-
-		var price_label := Label.new()
-		price_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		price_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		price_label.add_theme_font_size_override("font_size", 18)
-		price_label.add_theme_color_override("font_color", Color("#bf6a12"))
-		price_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		item_button.add_child(price_label)
-		merchant_shop_price_labels.append(price_label)
-
-		var coin_icon: Control = MerchantCardIconScript.new()
-		coin_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		coin_icon.call("setup_coin")
-		item_button.add_child(coin_icon)
-		merchant_shop_coin_icons.append(coin_icon)
-
-	merchant_shop_close_button = Button.new()
-	merchant_shop_close_button.text = "离开商店"
-	merchant_shop_close_button.focus_mode = Control.FOCUS_NONE
-	merchant_shop_close_button.pressed.connect(hide_merchant_shop)
-	merchant_shop_panel.add_child(merchant_shop_close_button)
-
-	merchant_shop_dismiss_button = Button.new()
-	merchant_shop_dismiss_button.text = "驱赶商人"
-	merchant_shop_dismiss_button.focus_mode = Control.FOCUS_NONE
-	merchant_shop_dismiss_button.pressed.connect(_on_merchant_shop_dismiss_pressed)
-	merchant_shop_panel.add_child(merchant_shop_dismiss_button)
+		merchant_shop_card_icons.append(item_button.get_node("CardIcon"))
+		merchant_shop_card_titles.append(item_button.get_node("CardTitle"))
+		merchant_shop_card_descriptions.append(item_button.get_node("CardDescription"))
+		merchant_shop_price_labels.append(item_button.get_node("PurchaseButton/PurchasePrice"))
+		merchant_shop_coin_icons.append(item_button.get_node("PurchaseButton/CoinIcon"))
+	merchant_shop_close_button = shop_ui.get_node("MerchantShopPanel/CloseButton")
+	merchant_shop_dismiss_button = shop_ui.get_node("MerchantShopPanel/DismissButton")
+	shop_ui.item_selected.connect(_on_merchant_shop_item_pressed)
+	shop_ui.dismissed.connect(_on_merchant_shop_dismiss_pressed)
+	shop_ui.closed.connect(hide_merchant_shop)
 
 func _build_merchant_arrival_panel() -> void:
 	merchant_arrival_overlay = ColorRect.new()
 	merchant_arrival_overlay.name = "MerchantArrivalOverlay"
-	merchant_arrival_overlay.color = Color(0.01, 0.03, 0.07, 0.86)
+	merchant_arrival_overlay.color = ui_config.modal_overlay_color
 	merchant_arrival_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	merchant_arrival_overlay.visible = false
 	add_child(merchant_arrival_overlay)
 
 	merchant_arrival_panel = Panel.new()
 	merchant_arrival_panel.name = "MerchantArrivalPanel"
-	merchant_arrival_panel.add_theme_stylebox_override("panel", Art.panel_style(Art.PANEL_ALT, Art.INK, 28, 4))
+	merchant_arrival_panel.add_theme_stylebox_override("panel", Art.flat_panel_style(Art.POPUP_BACKGROUND_ALT))
 	merchant_arrival_overlay.add_child(merchant_arrival_panel)
 
 	merchant_arrival_title = Label.new()
@@ -562,8 +557,10 @@ func play_merchant_arrival(items: Array[String], cell: Vector2i) -> void:
 		merchant_arrival_tween.kill()
 	# The presentation is drawn by the merchant landmark on the map. Keep the
 	# arrival overlay hidden so the world-space performance remains visible.
-	merchant_arrival_overlay.visible = false
-	merchant_shop_overlay.visible = false
+	if merchant_arrival_overlay != null:
+		merchant_arrival_overlay.visible = false
+	if merchant_shop_overlay != null:
+		merchant_shop_overlay.visible = false
 	merchant_arrival_tween = create_tween()
 	merchant_arrival_tween.tween_interval(Config.MERCHANT_PRESENTATION_DURATION)
 	merchant_arrival_tween.tween_callback(_finish_merchant_arrival.bind(cell))
@@ -593,46 +590,33 @@ func show_merchant_shop(items: Array[String], player_gold: int = -1) -> void:
 		return
 	if player_gold < 0:
 		player_gold = 0
-	for index in range(merchant_shop_buttons.size()):
-		var button := merchant_shop_buttons[index]
-		var card_icon := merchant_shop_card_icons[index]
-		var card_title := merchant_shop_card_titles[index]
-		var card_description := merchant_shop_card_descriptions[index]
-		var price_label := merchant_shop_price_labels[index]
-		var coin_icon := merchant_shop_coin_icons[index]
-		if index < items.size():
-			var item_id := str(items[index])
-			var item: Dictionary = MerchantDataScript.get_item(item_id)
-			card_icon.call("setup_card", item_id)
-			card_title.text = str(item.get("name", "未知卡片"))
-			card_description.text = str(item.get("description", ""))
-			price_label.text = str(Config.MERCHANT_ITEM_COST)
-			price_label.add_theme_color_override("font_color", Art.CORAL.darkened(0.18) if player_gold < Config.MERCHANT_ITEM_COST else Color("#a9650f"))
-			card_icon.visible = true
-			card_title.visible = true
-			card_description.visible = true
-			price_label.visible = true
-			coin_icon.visible = true
-			button.disabled = false
-		else:
-			button.text = ""
-			card_icon.visible = false
-			card_title.visible = false
-			card_description.visible = false
-			price_label.visible = false
-			coin_icon.visible = false
-			button.disabled = true
+	merchant_shop_overlay.call("set_items", items, player_gold)
+	_update_merchant_price_colors(player_gold)
 	merchant_shop_overlay.visible = true
+	# Keep the normal HUD gold bar readable above the modal dimmer.
+	stats_label.z_index = 20
+	gold_icon.z_index = 20
 
 func _update_merchant_price_colors(player_gold: int) -> void:
 	var price_color := Art.CORAL.darkened(0.18) if player_gold < Config.MERCHANT_ITEM_COST else Color("#a9650f")
 	for price_label in merchant_shop_price_labels:
 		if is_instance_valid(price_label) and price_label.visible:
-			price_label.add_theme_color_override("font_color", price_color)
+			if player_gold < Config.MERCHANT_ITEM_COST:
+				price_label.add_theme_color_override("font_color", price_color)
+			else:
+				price_label.remove_theme_color_override("font_color")
+
+func _update_merchant_gold(player_gold: int) -> void:
+	if merchant_shop_gold_label != null:
+		merchant_shop_gold_label.text = "金币  %d" % maxi(0, player_gold)
 
 func hide_merchant_shop() -> void:
 	if merchant_shop_overlay != null:
 		merchant_shop_overlay.visible = false
+	if stats_label != null:
+		stats_label.z_index = 0
+	if gold_icon != null:
+		gold_icon.z_index = 1
 
 func hide_merchant_arrival() -> void:
 	if merchant_arrival_tween != null and merchant_arrival_tween.is_valid():
@@ -873,18 +857,18 @@ func _is_enemy_territory_near_player() -> bool:
 
 func _build_player_info_panel() -> void:
 	player_info_overlay = ColorRect.new()
-	player_info_overlay.color = Color(0.01, 0.03, 0.07, 0.72)
+	player_info_overlay.color = ui_config.overlay_color
 	player_info_overlay.position = Vector2.ZERO
 	player_info_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	player_info_overlay.visible = false
 	add_child(player_info_overlay)
 
 	player_info_panel = Panel.new()
-	player_info_panel.add_theme_stylebox_override("panel", Art.panel_style(Art.PANEL_ALT, Art.INK, 26, 4))
+	player_info_panel.add_theme_stylebox_override("panel", Art.flat_panel_style(Art.POPUP_BACKGROUND_ALT))
 	player_info_overlay.add_child(player_info_panel)
 
 	player_info_title = Label.new()
-	player_info_title.text = "主角信息"
+	player_info_title.text = "城堡信息"
 	player_info_title.add_theme_font_size_override("font_size", 25)
 	player_info_title.add_theme_color_override("font_color", Art.INK)
 	player_info_panel.add_child(player_info_title)
@@ -947,14 +931,14 @@ func _build_player_info_panel() -> void:
 
 func _build_equipment_panels() -> void:
 	equipment_detail_overlay = ColorRect.new()
-	equipment_detail_overlay.color = Color(0.01, 0.03, 0.07, 0.78)
+	equipment_detail_overlay.color = Color(0.01, 0.03, 0.07, 0.46)
 	equipment_detail_overlay.position = Vector2.ZERO
 	equipment_detail_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	equipment_detail_overlay.visible = false
 	add_child(equipment_detail_overlay)
 
 	equipment_detail_panel = Panel.new()
-	equipment_detail_panel.add_theme_stylebox_override("panel", Art.panel_style(Art.PANEL, Art.INK, 26, 4))
+	equipment_detail_panel.add_theme_stylebox_override("panel", Art.flat_panel_style())
 	equipment_detail_overlay.add_child(equipment_detail_panel)
 
 	equipment_detail_title = Label.new()
@@ -982,14 +966,14 @@ func _build_equipment_panels() -> void:
 	equipment_detail_panel.add_child(equipment_detail_close_button)
 
 	equipment_replacement_overlay = ColorRect.new()
-	equipment_replacement_overlay.color = Color(0.01, 0.03, 0.07, 0.84)
+	equipment_replacement_overlay.color = Color(0.01, 0.03, 0.07, 0.50)
 	equipment_replacement_overlay.position = Vector2.ZERO
 	equipment_replacement_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	equipment_replacement_overlay.visible = false
 	add_child(equipment_replacement_overlay)
 
 	equipment_replacement_panel = Panel.new()
-	equipment_replacement_panel.add_theme_stylebox_override("panel", Art.panel_style(Art.PANEL, Art.INK, 26, 4))
+	equipment_replacement_panel.add_theme_stylebox_override("panel", Art.flat_panel_style())
 	equipment_replacement_overlay.add_child(equipment_replacement_panel)
 
 	equipment_replacement_title = Label.new()
@@ -1008,6 +992,18 @@ func _build_equipment_panels() -> void:
 	equipment_replacement_new_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	equipment_replacement_new_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	equipment_replacement_panel.add_child(equipment_replacement_new_icon)
+
+	equipment_recommendation_badge = Panel.new()
+	equipment_recommendation_badge.name = "EquipmentRecommendationBadge"
+	equipment_recommendation_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	equipment_recommendation_badge.visible = false
+	equipment_replacement_panel.add_child(equipment_recommendation_badge)
+	equipment_recommendation_label = Label.new()
+	equipment_recommendation_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	equipment_recommendation_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	equipment_recommendation_label.add_theme_font_size_override("font_size", 14)
+	equipment_recommendation_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	equipment_recommendation_badge.add_child(equipment_recommendation_label)
 
 	equipment_replacement_current_label = Label.new()
 	equipment_replacement_current_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -1110,6 +1106,7 @@ func show_equipment_replacement(current_item: String, new_item: String) -> void:
 	equipment_replacement_title.text = "%s部位装备替换" % next["slot"]
 	equipment_replacement_current_icon.texture = load(str(current["icon"])) as Texture2D
 	equipment_replacement_new_icon.texture = load(str(next["icon"])) as Texture2D
+	_set_equipment_recommendation(int(next.get("quality", 1)) - int(current.get("quality", 1)))
 	equipment_replacement_current_label.text = "当前装备\n%s\n%s" % [current["name"], current["description"]]
 	equipment_replacement_new_label.text = "新装备\n%s\n%s" % [next["name"], next["description"]]
 	equipment_detail_overlay.visible = false
@@ -1118,6 +1115,37 @@ func show_equipment_replacement(current_item: String, new_item: String) -> void:
 func hide_equipment_replacement() -> void:
 	if equipment_replacement_overlay:
 		equipment_replacement_overlay.visible = false
+	if equipment_recommendation_badge:
+		equipment_recommendation_badge.visible = false
+
+func _set_equipment_recommendation(quality_difference: int) -> void:
+	if equipment_recommendation_badge == null or equipment_recommendation_label == null:
+		return
+	var badge_text := "一般"
+	var background_color := Color("#e5e7eb")
+	var border_color := Color("#6b7280")
+	var text_color := Color("#4b5563")
+	if quality_difference > 0:
+		badge_text = "推荐"
+		background_color = Color("#dcfce7")
+		border_color = Color("#16a34a")
+		text_color = Color("#166534")
+	elif quality_difference < 0:
+		badge_text = "不推荐"
+		background_color = Color("#fee2e2")
+		border_color = Color("#dc2626")
+		text_color = Color("#b91c1c")
+	var style := StyleBoxFlat.new()
+	style.bg_color = background_color
+	style.border_color = border_color
+	style.set_border_width_all(2)
+	style.set_corner_radius_all(6)
+	style.content_margin_left = 6.0
+	style.content_margin_right = 6.0
+	equipment_recommendation_badge.add_theme_stylebox_override("panel", style)
+	equipment_recommendation_label.text = badge_text
+	equipment_recommendation_label.add_theme_color_override("font_color", text_color)
+	equipment_recommendation_badge.visible = true
 
 func _on_equipment_replace_pressed() -> void:
 	if main_ref:
@@ -1145,14 +1173,14 @@ func _close_player_info() -> void:
 
 func _build_card_event_panel() -> void:
 	card_event_overlay = ColorRect.new()
-	card_event_overlay.color = Color(0.01, 0.03, 0.07, 0.78)
+	card_event_overlay.color = ui_config.overlay_color
 	card_event_overlay.position = Vector2.ZERO
 	card_event_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	card_event_overlay.visible = false
 	add_child(card_event_overlay)
 
 	card_event_panel = Panel.new()
-	card_event_panel.add_theme_stylebox_override("panel", Art.panel_style(Art.PANEL_ALT, Art.PURPLE, 28, 4))
+	card_event_panel.add_theme_stylebox_override("panel", Art.flat_panel_style(Art.POPUP_BACKGROUND_ALT, Art.POPUP_ACCENT))
 	card_event_overlay.add_child(card_event_panel)
 
 	card_event_title = Label.new()
@@ -1175,6 +1203,7 @@ func _build_card_event_panel() -> void:
 	card_draw_result_icon.visible = false
 	card_event_panel.add_child(card_draw_result_icon)
 
+
 	card_event_detail = Label.new()
 	card_event_detail.text = "卡片正在滚动"
 	card_event_detail.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -1183,77 +1212,49 @@ func _build_card_event_panel() -> void:
 	card_event_detail.add_theme_color_override("font_color", Art.INK_SOFT)
 	card_event_panel.add_child(card_event_detail)
 
+	card_draw_confirm_button = Button.new()
+	card_draw_confirm_button.text = "确认"
+	card_draw_confirm_button.visible = false
+	card_draw_confirm_button.focus_mode = Control.FOCUS_ALL
+	Art.apply_flat_button(card_draw_confirm_button, Art.POPUP_ACCENT)
+	card_draw_confirm_button.pressed.connect(_confirm_card_draw)
+	card_event_panel.add_child(card_draw_confirm_button)
+
+	card_draw_countdown_label = Label.new()
+	card_draw_countdown_label.text = "2秒后自动关闭"
+	card_draw_countdown_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	card_draw_countdown_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	card_draw_countdown_label.add_theme_font_size_override("font_size", 16)
+	card_draw_countdown_label.add_theme_color_override("font_color", Art.INK_SOFT)
+	card_draw_countdown_label.visible = false
+	card_event_panel.add_child(card_draw_countdown_label)
+
+
 func _build_divination_panel() -> void:
-	divination_overlay = ColorRect.new()
-	divination_overlay.name = "DivinationOverlay"
-	divination_overlay.color = Color(0.01, 0.02, 0.06, 0.76)
-	divination_overlay.position = Vector2.ZERO
-	divination_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
-	divination_overlay.visible = false
-	add_child(divination_overlay)
-
-	divination_panel = Panel.new()
-	divination_panel.name = "DivinationHouse"
-	var panel_style := StyleBoxFlat.new()
-	panel_style.bg_color = Art.PANEL_ALT
-	panel_style.border_color = Art.PURPLE
-	panel_style.set_border_width_all(4)
-	panel_style.set_corner_radius_all(22)
-	panel_style.shadow_color = Art.SHADOW
-	panel_style.shadow_size = 8
-	panel_style.shadow_offset = Vector2(0, 6)
-	divination_panel.add_theme_stylebox_override("panel", panel_style)
-	divination_overlay.add_child(divination_panel)
-	divination_house_art = DivinationHouseArtScript.new()
-	divination_house_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	divination_panel.add_child(divination_house_art)
-
-	divination_title = Label.new()
-	divination_title.text = "占卜屋"
-	divination_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	divination_title.add_theme_font_size_override("font_size", 28)
-	divination_title.add_theme_color_override("font_color", Art.INK)
-	divination_panel.add_child(divination_title)
-
-	divination_target = Label.new()
-	divination_target.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	divination_target.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	divination_target.add_theme_font_size_override("font_size", 18)
-	divination_target.add_theme_color_override("font_color", Art.PURPLE.darkened(0.18))
-	divination_panel.add_child(divination_target)
-
-	var icon_names := ["卡", "营", "损", "金", "升", "降"]
-	for icon_name in icon_names:
-		var icon := Label.new()
-		icon.text = icon_name
-		icon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		icon.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		icon.add_theme_font_size_override("font_size", 26)
-		icon.add_theme_color_override("font_color", Color("#c4b5fd"))
-		icon.add_theme_color_override("font_outline_color", Color(0.03, 0.02, 0.10, 0.95))
-		icon.add_theme_constant_override("outline_size", 4)
-		divination_panel.add_child(icon)
-		divination_event_icons.append(icon)
-
-	divination_event_label = Label.new()
-	divination_event_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	divination_event_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	divination_event_label.add_theme_font_size_override("font_size", 19)
-	divination_event_label.add_theme_color_override("font_color", Art.INK_SOFT)
-	divination_panel.add_child(divination_event_label)
-
-	divination_result = Label.new()
-	divination_result.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	divination_result.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	divination_result.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	divination_result.add_theme_font_size_override("font_size", 16)
-	divination_result.add_theme_color_override("font_color", Color("#fbbf24"))
-	divination_panel.add_child(divination_result)
+	var divination_scene := preload("res://DivinationUI.tscn")
+	var divination_ui: Control = divination_scene.instantiate()
+	divination_ui.name = "DivinationOverlay"
+	divination_ui.visible = false
+	add_child(divination_ui)
+	divination_root = divination_ui
+	divination_overlay = divination_ui.get_node("DivinationOverlay") as ColorRect
+	divination_overlay.color = ui_config.modal_overlay_color
+	divination_panel = divination_ui.get_node("DivinationHouse") as Panel
+	divination_panel.add_theme_stylebox_override("panel", Art.flat_panel_style(Art.POPUP_BACKGROUND_ALT, Art.POPUP_ACCENT))
+	divination_title = divination_ui.get_node("DivinationHouse/DivinationTitle") as Label
+	divination_target = divination_ui.get_node("DivinationHouse/DivinationTarget") as Label
+	divination_target_display = divination_ui.get_node("DivinationHouse/DivinationTargetDisplay") as DivinationTargetDisplay
+	divination_house_art = divination_ui.get_node("DivinationHouse/DivinationHouseArt") as Control
+	divination_event_icons.clear()
+	for icon_name in ["Card", "Barracks", "Loss", "Gold", "Rise", "Fall"]:
+		divination_event_icons.append(divination_ui.get_node("DivinationHouse/EventIcon%s" % icon_name) as Label)
+	divination_event_label = divination_ui.get_node("DivinationHouse/DivinationEventLabel") as Label
+	divination_result = divination_ui.get_node("DivinationHouse/DivinationResult") as Label
 
 func _build_intelligence_news_panel() -> void:
 	intelligence_news_overlay = ColorRect.new()
 	intelligence_news_overlay.name = "IntelligenceNewsOverlay"
-	intelligence_news_overlay.color = Color(0.01, 0.02, 0.04, 0.70)
+	intelligence_news_overlay.color = ui_config.modal_overlay_color
 	intelligence_news_overlay.position = Vector2.ZERO
 	intelligence_news_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	intelligence_news_overlay.visible = false
@@ -1261,7 +1262,7 @@ func _build_intelligence_news_panel() -> void:
 
 	intelligence_news_panel = Panel.new()
 	intelligence_news_panel.name = "IntelligenceNewsPaper"
-	intelligence_news_panel.add_theme_stylebox_override("panel", Art.panel_style(Art.PANEL, Color("#9a7438"), 18, 3))
+	intelligence_news_panel.add_theme_stylebox_override("panel", Art.flat_panel_style())
 	intelligence_news_overlay.add_child(intelligence_news_panel)
 
 	intelligence_news_kicker = Label.new()
@@ -1335,6 +1336,7 @@ func hide_intelligence_news() -> void:
 func _refresh_broadcast_banner() -> void:
 	if bombardment_banner == null or bombardment_banner_label == null:
 		return
+	_layout_broadcast_banner_content()
 	if world_broadcast_remaining > 0.0 and not world_broadcast_message.is_empty():
 		bombardment_banner_label.text = world_broadcast_message
 		bombardment_banner.visible = true
@@ -1343,6 +1345,25 @@ func _refresh_broadcast_banner() -> void:
 		bombardment_banner.visible = true
 	else:
 		bombardment_banner.visible = false
+
+func _layout_broadcast_banner_content() -> void:
+	if bombardment_banner == null or bombardment_banner_label == null:
+		return
+	var has_avatar := world_broadcast_faction >= 0
+	if broadcast_faction_avatar != null:
+		broadcast_faction_avatar.visible = has_avatar
+		if has_avatar:
+			broadcast_faction_avatar.position = Vector2(9.0, 7.0)
+			broadcast_faction_avatar.size = Vector2(32.0, 32.0)
+			broadcast_faction_avatar.call("setup", world_broadcast_faction)
+	if has_avatar:
+		bombardment_banner_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		bombardment_banner_label.position = Vector2(50.0, 0.0)
+		bombardment_banner_label.size = Vector2(maxf(0.0, bombardment_banner.size.x - 62.0), bombardment_banner.size.y)
+	else:
+		bombardment_banner_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		bombardment_banner_label.position = Vector2(12.0, 0.0)
+		bombardment_banner_label.size = Vector2(maxf(0.0, bombardment_banner.size.x - 24.0), bombardment_banner.size.y)
 
 func play_card_event(owner: int, card_type: int, fate_cell: Vector2i) -> void:
 	card_event_queue.append({"owner": owner, "card_type": card_type, "fate_cell": fate_cell})
@@ -1369,8 +1390,10 @@ func _start_next_card_event() -> void:
 		card_event_card.text = str(drawn_item.get("name", "未知卡片"))
 		card_event_detail.text = str(drawn_item.get("description", ""))
 		_set_card_draw_result_layout(true)
-		card_event_tween.tween_interval(Config.QUESTION_CARD_RESULT_DURATION)
-		card_event_tween.tween_callback(_finish_card_draw)
+		card_draw_countdown_remaining = Config.QUESTION_CARD_RESULT_DURATION
+		card_draw_confirm_button.visible = true
+		card_draw_countdown_label.visible = true
+		_update_card_draw_countdown_label()
 		return
 	_set_card_draw_result_layout(false)
 	card_event_title.text = "随机事件 · 翻卡"
@@ -1409,13 +1432,31 @@ func _finish_card_event() -> void:
 func _finish_card_draw() -> void:
 	if not card_event_running or card_event_current.is_empty():
 		return
+	if card_event_tween != null and card_event_tween.is_valid():
+		card_event_tween.kill()
 	var owner := int(card_event_current.get("owner", 1))
 	var card_id := str(card_event_current.get("card_id", ""))
 	var fate_cell: Vector2i = card_event_current.get("fate_cell", Vector2i(999, 999))
+	card_draw_countdown_remaining = 0.0
+	card_draw_confirm_button.visible = false
+	card_draw_countdown_label.visible = false
 	card_draw_finished.emit(owner, card_id, fate_cell)
 	card_event_current = {}
 	card_event_running = false
 	_start_next_card_event()
+
+func _confirm_card_draw() -> void:
+	if not card_event_running or card_event_current.is_empty():
+		return
+	if not bool(card_event_current.get("is_card_draw", false)):
+		return
+	_finish_card_draw()
+
+func _update_card_draw_countdown_label() -> void:
+	if card_draw_countdown_label == null:
+		return
+	var seconds_left := maxi(0, int(ceil(card_draw_countdown_remaining)))
+	card_draw_countdown_label.text = "%d秒后自动关闭" % seconds_left
 
 func _set_card_draw_result_layout(active: bool) -> void:
 	if card_draw_result_icon == null or card_event_panel == null:
@@ -1429,12 +1470,20 @@ func _set_card_draw_result_layout(active: bool) -> void:
 		card_event_card.size = Vector2(card_width - 48.0, 52.0)
 		card_event_detail.position = Vector2(34.0, 292.0)
 		card_event_detail.size = Vector2(card_width - 68.0, 110.0)
+		var confirm_rect := _ui_rect("card_draw_confirm_button_rect", Rect2(card_width * 0.5 - 112.0, 420.0, 126.0, 42.0))
+		card_draw_confirm_button.position = confirm_rect.position
+		card_draw_confirm_button.size = confirm_rect.size
+		var countdown_rect := _ui_rect("card_draw_countdown_rect", Rect2(card_width * 0.5 + 30.0, 426.0, 150.0, 30.0))
+		card_draw_countdown_label.position = countdown_rect.position
+		card_draw_countdown_label.size = countdown_rect.size
 	else:
 		var card_width := card_event_panel.size.x
 		card_event_card.position = Vector2(24.0, 132.0)
 		card_event_card.size = Vector2(card_width - 48.0, 150.0)
 		card_event_detail.position = Vector2(24.0, 310.0)
 		card_event_detail.size = Vector2(card_width - 48.0, 48.0)
+		card_draw_confirm_button.visible = false
+		card_draw_countdown_label.visible = false
 
 func clear_card_events() -> void:
 	if card_event_tween != null and card_event_tween.is_valid():
@@ -1442,6 +1491,11 @@ func clear_card_events() -> void:
 	card_event_queue.clear()
 	card_event_current = {}
 	card_event_running = false
+	card_draw_countdown_remaining = 0.0
+	if card_draw_confirm_button:
+		card_draw_confirm_button.visible = false
+	if card_draw_countdown_label:
+		card_draw_countdown_label.visible = false
 	if card_draw_result_icon:
 		card_draw_result_icon.visible = false
 	if card_event_overlay:
@@ -1472,18 +1526,21 @@ func _layout_ui() -> void:
 		player_camera_guide.size = viewport_size
 		enemy_camera_guide.call("configure_safe_rect", guide_rect)
 		player_camera_guide.call("configure_safe_rect", guide_rect)
-	player_info_button.position = Vector2(16, 78)
-	player_info_button.size = Vector2(112, 36)
+	var player_info_button_rect := _ui_rect("player_info_button_rect", Rect2(16.0, 78.0, 48.0, 48.0))
+	var authored_rect := _authored_hud_rect("PlayerInfoButton", player_info_button_rect)
+	player_info_button.position = authored_rect.position
+	player_info_button.size = authored_rect.size
 	player_info_button.visible = viewport_size.x >= 150.0
 	player_info_title.position = Vector2(28, 20)
-	player_info_close_button.position = Vector2(player_info_panel.size.x - 94, 18)
-	player_info_close_button.size = Vector2(70, 34)
-	var info_width := minf(viewport_size.x * 0.86, 600.0)
-	var info_height := minf(viewport_size.y * 0.68, 760.0)
+	var info_close_rect := _ui_rect("player_info_close_button_rect", Rect2(-94.0, 18.0, 70.0, 34.0))
+	var info_size := _ui_panel_size("player_info_panel_size", Vector2(600.0, 760.0), 0.86, 0.68)
+	var info_width := info_size.x
+	var info_height := info_size.y
 	player_info_panel.size = Vector2(info_width, info_height)
-	player_info_panel.position = Vector2((viewport_size.x - info_width) * 0.5, (viewport_size.y - info_height) * 0.5)
+	player_info_panel.position = _centered_ui_position(info_size, "player_info_panel_offset")
 	player_info_title.position = Vector2(28, 20)
-	player_info_close_button.position = Vector2(info_width - 94, 18)
+	player_info_close_button.position = Vector2(info_width + info_close_rect.position.x, info_close_rect.position.y)
+	player_info_close_button.size = info_close_rect.size
 	player_info_equipment_title.position = Vector2(28, 248)
 	var slot_width := info_width - 56.0
 	for index in range(player_info_equipment_slots.size()):
@@ -1498,20 +1555,23 @@ func _layout_ui() -> void:
 	player_info_overlay.size = viewport_size
 	equipment_detail_overlay.size = viewport_size
 	equipment_replacement_overlay.size = viewport_size
-	var detail_width := minf(viewport_size.x * 0.86, 600.0)
-	equipment_detail_panel.size = Vector2(detail_width, 360.0)
-	equipment_detail_panel.position = Vector2((viewport_size.x - detail_width) * 0.5, (viewport_size.y - 360.0) * 0.5)
+	var detail_size := _ui_panel_size("equipment_detail_panel_size", Vector2(600.0, 360.0), 0.86, 0.80)
+	var detail_width := detail_size.x
+	equipment_detail_panel.size = detail_size
+	equipment_detail_panel.position = _centered_ui_position(detail_size, "equipment_detail_panel_offset")
 	equipment_detail_title.position = Vector2(24, 22)
 	equipment_detail_title.size = Vector2(detail_width - 48, 42)
 	equipment_detail_icon.position = Vector2((detail_width - 96.0) * 0.5, 78)
 	equipment_detail_icon.size = Vector2(96, 96)
 	equipment_detail_info.position = Vector2(30, 184)
 	equipment_detail_info.size = Vector2(detail_width - 60, 82)
-	equipment_detail_close_button.position = Vector2((detail_width - 120.0) * 0.5, 294)
-	equipment_detail_close_button.size = Vector2(120, 40)
-	var replacement_width := minf(viewport_size.x * 0.90, 640.0)
-	equipment_replacement_panel.size = Vector2(replacement_width, 450.0)
-	equipment_replacement_panel.position = Vector2((viewport_size.x - replacement_width) * 0.5, (viewport_size.y - 450.0) * 0.5)
+	var detail_close_rect := _ui_rect("equipment_detail_close_button_rect", Rect2(0.0, 294.0, 120.0, 40.0))
+	equipment_detail_close_button.position = Vector2((detail_width - detail_close_rect.size.x) * 0.5 + detail_close_rect.position.x, detail_close_rect.position.y)
+	equipment_detail_close_button.size = detail_close_rect.size
+	var replacement_size := _ui_panel_size("equipment_replacement_panel_size", Vector2(640.0, 450.0), 0.90, 0.82)
+	var replacement_width := replacement_size.x
+	equipment_replacement_panel.size = replacement_size
+	equipment_replacement_panel.position = _centered_ui_position(replacement_size, "equipment_replacement_panel_offset")
 	equipment_replacement_title.position = Vector2(24, 20)
 	equipment_replacement_title.size = Vector2(replacement_width - 48, 42)
 	var replacement_column_width := (replacement_width - 72.0) * 0.5
@@ -1519,19 +1579,28 @@ func _layout_ui() -> void:
 	equipment_replacement_current_icon.size = Vector2(88, 88)
 	equipment_replacement_new_icon.position = Vector2(48 + replacement_column_width + (replacement_column_width - 88.0) * 0.5, 82)
 	equipment_replacement_new_icon.size = Vector2(88, 88)
+	if equipment_recommendation_badge != null:
+		var recommendation_size := Vector2(76.0, 28.0)
+		equipment_recommendation_badge.position = equipment_replacement_new_icon.position + Vector2(equipment_replacement_new_icon.size.x - recommendation_size.x + 12.0, -8.0)
+		equipment_recommendation_badge.size = recommendation_size
+		equipment_recommendation_label.position = Vector2.ZERO
+		equipment_recommendation_label.size = recommendation_size
 	equipment_replacement_current_label.position = Vector2(24, 180)
 	equipment_replacement_current_label.size = Vector2(replacement_column_width, 116)
 	equipment_replacement_new_label.position = Vector2(48 + replacement_column_width, 180)
 	equipment_replacement_new_label.size = Vector2(replacement_column_width, 116)
-	equipment_replace_button.position = Vector2(replacement_width * 0.5 - 146, 370)
-	equipment_replace_button.size = Vector2(120, 42)
-	equipment_discard_button.position = Vector2(replacement_width * 0.5 + 26, 370)
-	equipment_discard_button.size = Vector2(120, 42)
+	var replace_rect := _ui_rect("equipment_replace_button_rect", Rect2(-146.0, 370.0, 120.0, 42.0))
+	equipment_replace_button.position = Vector2(replacement_width * 0.5 + replace_rect.position.x, replace_rect.position.y)
+	equipment_replace_button.size = replace_rect.size
+	var discard_rect := _ui_rect("equipment_discard_button_rect", Rect2(26.0, 370.0, 120.0, 42.0))
+	equipment_discard_button.position = Vector2(replacement_width * 0.5 + discard_rect.position.x, discard_rect.position.y)
+	equipment_discard_button.size = discard_rect.size
 	card_event_overlay.size = viewport_size
-	var card_width := minf(viewport_size.x * 0.84, 580.0)
-	var card_height := minf(viewport_size.y * 0.42, 520.0)
+	var card_size := _ui_panel_size("card_event_panel_size", Vector2(580.0, 520.0), 0.84, 0.60)
+	var card_width := card_size.x
+	var card_height := card_size.y
 	card_event_panel.size = Vector2(card_width, card_height)
-	card_event_panel.position = Vector2((viewport_size.x - card_width) * 0.5, (viewport_size.y - card_height) * 0.5)
+	card_event_panel.position = _centered_ui_position(card_size, "card_event_panel_offset")
 	card_event_title.position = Vector2(24, 32)
 	card_event_title.size = Vector2(card_width - 48, 48)
 	card_event_card.position = Vector2(24, 132)
@@ -1541,34 +1610,32 @@ func _layout_ui() -> void:
 	card_draw_result_icon.visible = bool(card_event_current.get("is_card_draw", false))
 	if card_draw_result_icon.visible:
 		_set_card_draw_result_layout(true)
-	card_event_detail.position = Vector2(24, 310)
-	card_event_detail.size = Vector2(card_width - 48, 48)
+	else:
+		card_event_detail.position = Vector2(24, 310)
+		card_event_detail.size = Vector2(card_width - 48, 48)
+	if card_draw_confirm_button != null:
+		var confirm_rect := _ui_rect("card_draw_confirm_button_rect", Rect2(card_width * 0.5 - 112.0, 420.0, 126.0, 42.0))
+		card_draw_confirm_button.position = confirm_rect.position
+		card_draw_confirm_button.size = confirm_rect.size
+		card_draw_confirm_button.visible = card_draw_result_icon.visible
+		var countdown_rect := _ui_rect("card_draw_countdown_rect", Rect2(card_width * 0.5 + 30.0, 426.0, 150.0, 30.0))
+		card_draw_countdown_label.position = countdown_rect.position
+		card_draw_countdown_label.size = countdown_rect.size
+		card_draw_countdown_label.visible = card_draw_result_icon.visible
+		if card_draw_result_icon.visible:
+			_update_card_draw_countdown_label()
 	divination_overlay.size = viewport_size
-	var divination_width := minf(viewport_size.x * 0.88, 620.0)
-	var divination_height := minf(viewport_size.y * 0.46, 470.0)
-	divination_panel.size = Vector2(divination_width, divination_height)
-	divination_panel.position = Vector2((viewport_size.x - divination_width) * 0.5, (viewport_size.y - divination_height) * 0.5)
-	divination_title.position = Vector2(24, 2)
-	divination_title.size = Vector2(divination_width - 48, 34)
-	divination_target.position = Vector2(24, 34)
-	divination_target.size = Vector2(divination_width - 48, 26)
-	divination_house_art.position = Vector2.ZERO
-	divination_house_art.size = Vector2(divination_width, 310.0)
-	var ball_center := Vector2(divination_width * 0.5, 132.0)
-	var icon_radius := 43.0
-	for index in range(divination_event_icons.size()):
-		var angle := -PI * 0.5 + TAU * float(index) / float(divination_event_icons.size())
-		divination_event_icons[index].position = ball_center + Vector2(cos(angle), sin(angle)) * icon_radius - Vector2(20.0, 20.0)
-		divination_event_icons[index].size = Vector2(40.0, 40.0)
-	divination_event_label.position = Vector2(24, 320)
-	divination_event_label.size = Vector2(divination_width - 48, 32)
-	divination_result.position = Vector2(28, 364)
-	divination_result.size = Vector2(divination_width - 56, divination_height - 384)
+	var divination_size := _ui_panel_size("divination_panel_size", Vector2(620.0, 470.0), 0.88, 0.58)
+	var divination_width := divination_size.x
+	var divination_height := divination_size.y
+	divination_panel.size = divination_size
+	divination_panel.position = _centered_ui_position(divination_size, "divination_panel_offset")
 	intelligence_news_overlay.size = viewport_size
-	var news_width := minf(viewport_size.x * 0.88, 620.0)
-	var news_height := minf(viewport_size.y * 0.34, 380.0)
+	var news_size := _ui_panel_size("intelligence_panel_size", Vector2(620.0, 380.0), 0.88, 0.50)
+	var news_width := news_size.x
+	var news_height := news_size.y
 	intelligence_news_panel.size = Vector2(news_width, news_height)
-	intelligence_news_panel.position = Vector2((viewport_size.x - news_width) * 0.5, (viewport_size.y - news_height) * 0.5)
+	intelligence_news_panel.position = _centered_ui_position(news_size, "intelligence_panel_offset")
 	intelligence_news_kicker.position = Vector2(24, 20)
 	intelligence_news_kicker.size = Vector2(news_width - 48, 28)
 	intelligence_news_title.position = Vector2(24, 64)
@@ -1577,41 +1644,18 @@ func _layout_ui() -> void:
 	intelligence_news_content.size = Vector2(news_width - 68, news_height - 192)
 	intelligence_news_footer.position = Vector2(24, news_height - 42)
 	intelligence_news_footer.size = Vector2(news_width - 48, 24)
-	merchant_shop_overlay.size = viewport_size
-	var merchant_width := minf(viewport_size.x * 0.92, 660.0)
-	var merchant_height := minf(viewport_size.y * 0.48, 500.0)
-	merchant_shop_panel.size = Vector2(merchant_width, merchant_height)
-	merchant_shop_panel.position = Vector2((viewport_size.x - merchant_width) * 0.5, (viewport_size.y - merchant_height) * 0.5)
-	merchant_shop_title.position = Vector2(104.0, 22.0)
-	merchant_shop_title.size = Vector2(merchant_width - 124.0, 42.0)
-	merchant_shop_art.position = Vector2(12.0, 4.0)
-	merchant_shop_art.size = Vector2(82.0, 76.0)
-	var merchant_gap := 12.0
-	var merchant_button_width := (merchant_width - 40.0 - merchant_gap * 2.0) / 3.0
-	for index in range(merchant_shop_buttons.size()):
-		merchant_shop_buttons[index].position = Vector2(20.0 + index * (merchant_button_width + merchant_gap), 84.0)
-		merchant_shop_buttons[index].size = Vector2(merchant_button_width, merchant_height - 154.0)
-	merchant_shop_close_button.position = Vector2((merchant_width - 140.0) * 0.5, merchant_height - 56.0)
-	merchant_shop_close_button.size = Vector2(140.0, 38.0)
-	merchant_shop_dismiss_button.position = Vector2(20.0, merchant_height - 56.0)
-	merchant_shop_dismiss_button.size = Vector2(140.0, 38.0)
-	for index in range(merchant_shop_buttons.size()):
-		var button_size := merchant_shop_buttons[index].size
-		merchant_shop_card_icons[index].position = Vector2((button_size.x - 64.0) * 0.5, 12.0)
-		merchant_shop_card_icons[index].size = Vector2(64.0, 78.0)
-		merchant_shop_card_titles[index].position = Vector2(8.0, 88.0)
-		merchant_shop_card_titles[index].size = Vector2(button_size.x - 16.0, 28.0)
-		merchant_shop_card_descriptions[index].position = Vector2(10.0, 122.0)
-		merchant_shop_card_descriptions[index].size = Vector2(button_size.x - 20.0, maxf(34.0, button_size.y - 178.0))
-		merchant_shop_price_labels[index].position = Vector2(button_size.x - 88.0, button_size.y - 48.0)
-		merchant_shop_price_labels[index].size = Vector2(42.0, 30.0)
-		merchant_shop_coin_icons[index].position = Vector2(button_size.x - 48.0, button_size.y - 48.0)
-		merchant_shop_coin_icons[index].size = Vector2(30.0, 30.0)
-	merchant_arrival_overlay.size = viewport_size
-	var arrival_width := minf(viewport_size.x * 0.88, 620.0)
-	var arrival_height := minf(viewport_size.y * 0.46, 480.0)
-	merchant_arrival_panel.size = Vector2(arrival_width, arrival_height)
-	merchant_arrival_panel.position = Vector2((viewport_size.x - arrival_width) * 0.5, (viewport_size.y - arrival_height) * 0.5)
+	if merchant_shop_overlay != null:
+		merchant_shop_overlay.size = viewport_size
+		var shop_size := _ui_panel_size("merchant_shop_panel_size", Vector2(660.0, 500.0), 0.94, 0.86)
+		merchant_shop_panel.size = shop_size
+		merchant_shop_panel.position = _centered_ui_position(shop_size, "merchant_shop_panel_offset")
+	if merchant_arrival_overlay != null:
+		merchant_arrival_overlay.size = viewport_size
+	var arrival_size := _ui_panel_size("merchant_arrival_panel_size", Vector2(620.0, 480.0), 0.88, 0.58)
+	var arrival_width := arrival_size.x
+	var arrival_height := arrival_size.y
+	merchant_arrival_panel.size = arrival_size
+	merchant_arrival_panel.position = _centered_ui_position(arrival_size, "merchant_arrival_panel_offset")
 	merchant_arrival_title.position = Vector2(24.0, 24.0)
 	merchant_arrival_title.size = Vector2(arrival_width - 48.0, 42.0)
 	merchant_arrival_hint.position = Vector2(24.0, 68.0)
@@ -1620,56 +1664,203 @@ func _layout_ui() -> void:
 	merchant_arrival_art.size = Vector2(180.0, 132.0)
 	for card_icon in merchant_arrival_cards:
 		card_icon.size = Vector2(82.0, 108.0)
-	player_info_button.position = Vector2(16, 78)
-	player_info_button.size = Vector2(48, 48)
+	var authored_player_button_rect := _authored_hud_rect("PlayerInfoButton", player_info_button_rect)
+	player_info_button.position = authored_player_button_rect.position
+	player_info_button.size = authored_player_button_rect.size
 	if bottom_status_panel != null:
-		bottom_status_panel.position = Vector2(16.0, viewport_size.y - 78.0)
-		bottom_status_panel.size = Vector2(maxf(1.0, minf(310.0, viewport_size.x - 32.0)), 62.0)
-	stats_label.position = Vector2(16.0, 14.0)
-	stats_label.size = Vector2(150.0, 34.0)
-	fps_label.position = Vector2(16.0, 120.0)
-	fps_label.size = Vector2(100.0, 24.0)
-	status_label.position = Vector2(maxf(1.0, viewport_size.x - 430.0), 14.0)
-	status_label.size = Vector2(minf(414.0, maxf(1.0, viewport_size.x - 450.0)), 34.0)
-	army_label.position = Vector2(maxf(1.0, viewport_size.x - 430.0), 45.0)
-	army_label.size = Vector2(minf(414.0, maxf(1.0, viewport_size.x - 450.0)), 26.0)
+		var bottom_rect := _ui_rect("bottom_status_rect", Rect2(16.0, -78.0, 310.0, 62.0))
+		bottom_status_panel.position = Vector2(bottom_rect.position.x, viewport_size.y + bottom_rect.position.y)
+		bottom_status_panel.size = Vector2(maxf(1.0, minf(bottom_rect.size.x, viewport_size.x - 32.0)), bottom_rect.size.y)
+	if gold_panel != null:
+		# Keep the authored scene position and size; edit them directly in
+		# BattleHUDPreview.tscn without this runtime HUD recreating the node.
+		gold_panel.z_index = 0
+	var gold_icon_rect := _authored_hud_rect("GoldIcon", _ui_rect("gold_icon_rect", Rect2(16.0, 14.0, 28.0, 28.0)))
+	gold_icon.position = gold_icon_rect.position
+	gold_icon.size = gold_icon_rect.size
+	var gold_label_rect := _authored_hud_rect("GoldLabel", _ui_rect("gold_label_rect", Rect2(48.0, 14.0, 118.0, 34.0)))
+	stats_label.position = gold_label_rect.position
+	stats_label.size = gold_label_rect.size
+	var fps_rect := _authored_hud_rect("FpsLabel", _ui_rect("fps_label_rect", Rect2(16.0, 120.0, 100.0, 24.0)))
+	fps_label.position = fps_rect.position
+	fps_label.size = fps_rect.size
+	var status_rect := _authored_hud_rect("StatusLabel", _ui_rect("status_label_rect", Rect2(-430.0, 14.0, 414.0, 34.0)))
+	status_label.position = status_rect.position
+	status_label.size = status_rect.size
+	var army_rect := _authored_hud_rect("ArmyLabel", _ui_rect("army_label_rect", Rect2(-430.0, 45.0, 414.0, 26.0)))
+	army_label.position = army_rect.position
+	army_label.size = army_rect.size
 	if faction_stats_display != null:
-		faction_stats_display.size = Vector2(maxf(230.0, 42.0 + float(Config.FACTION_IDS.size()) * 48.0), 78.0)
-		faction_stats_display.position = Vector2(
-			maxf(8.0, viewport_size.x - faction_stats_display.size.x - 16.0),
-			4.0
+		var required_faction_stats_size := Vector2(42.0 + float(Config.FACTION_IDS.size()) * ui_config.faction_stats_column_spacing, 78.0)
+		var configured_faction_stats_size := ui_config.faction_stats_size
+		var faction_stats_size := Vector2(
+			maxf(ui_config.faction_stats_minimum_size.x, maxf(configured_faction_stats_size.x, required_faction_stats_size.x)),
+			maxf(ui_config.faction_stats_minimum_size.y, maxf(configured_faction_stats_size.y, required_faction_stats_size.y))
 		)
-	hq_health_bar.position = Vector2(16.0, 50.0)
-	hq_health_bar.size = Vector2(142.0, 10.0)
+		var authored_faction_rect := _authored_hud_rect("FactionStatsDisplay", Rect2(Vector2.ZERO, faction_stats_size))
+		faction_stats_display.size = authored_faction_rect.size if authored_hud_layout.has("FactionStatsDisplay") else faction_stats_size
+		faction_stats_display.position = authored_faction_rect.position if authored_hud_layout.has("FactionStatsDisplay") else Vector2(
+			maxf(8.0, viewport_size.x - faction_stats_display.size.x + ui_config.faction_stats_position.x),
+			ui_config.faction_stats_position.y
+		)
+	var hq_rect := _authored_hud_rect("HQHealthBar", _ui_rect("hq_health_bar_rect", Rect2(16.0, 50.0, 142.0, 10.0)))
+	hq_health_bar.position = hq_rect.position
+	hq_health_bar.size = hq_rect.size
 	building_damage_edge_soft.position = Vector2.ZERO
 	building_damage_edge_soft.size = viewport_size
 	building_damage_edge.position = Vector2.ZERO
 	building_damage_edge.size = viewport_size
-	timer_label.position = Vector2(120.0, 62.0)
-	timer_label.size = Vector2(maxf(1.0, viewport_size.x - 240.0), 42.0)
-	var banner_width := maxf(1.0, minf(560.0, viewport_size.x - 32.0))
-	bombardment_banner.position = Vector2((viewport_size.x - banner_width) * 0.5, 110.0)
-	bombardment_banner.size = Vector2(banner_width, 46.0)
-	bombardment_banner_label.position = Vector2(12, 0)
-	bombardment_banner_label.size = Vector2(maxf(0.0, bombardment_banner.size.x - 24), bombardment_banner.size.y)
-	hint_container.position = Vector2(20.0, maxf(150.0, viewport_size.y - 220.0))
-	hint_container.size = Vector2(minf(420.0, maxf(1.0, viewport_size.x - 300.0)), PERSONAL_HINT_LINE_HEIGHT * PERSONAL_HINT_VISIBLE_LINES)
+	var timer_rect := _authored_hud_rect("TimerLabel", _ui_rect("timer_rect", Rect2(120.0, 62.0, -240.0, 42.0)))
+	timer_label.position = timer_rect.position
+	timer_label.size = timer_rect.size if timer_rect.size.x > 0.0 else Vector2(maxf(1.0, viewport_size.x + timer_rect.size.x - timer_rect.position.x), timer_rect.size.y)
+	var banner_rect := _authored_hud_rect("BroadcastPanel", _ui_rect("broadcast_rect", Rect2(0.0, 110.0, 560.0, 46.0)))
+	var banner_width := maxf(1.0, minf(banner_rect.size.x, viewport_size.x - 32.0))
+	bombardment_banner.position = banner_rect.position if authored_hud_layout.has("BroadcastPanel") else Vector2((viewport_size.x - banner_width) * 0.5 + banner_rect.position.x, banner_rect.position.y)
+	bombardment_banner.size = Vector2(banner_width, banner_rect.size.y)
+	_layout_broadcast_banner_content()
+	if bottom_status_panel != null and authored_hud_layout.has("BottomStatusPanel"):
+		var authored_bottom := _authored_hud_rect("BottomStatusPanel", Rect2())
+		bottom_status_panel.position = authored_bottom.position
+		bottom_status_panel.size = authored_bottom.size
+		if has_node("BottomStatusLabel"):
+			var authored_bottom_label := _authored_hud_rect("BottomStatusLabel", Rect2())
+			var bottom_label := get_node("BottomStatusLabel") as Control
+			bottom_label.position = authored_bottom_label.position
+			bottom_label.size = authored_bottom_label.size
+	var hint_rect := _ui_rect("hint_rect", Rect2(20.0, -220.0, 420.0, PERSONAL_HINT_LINE_HEIGHT * PERSONAL_HINT_VISIBLE_LINES))
+	hint_container.position = Vector2(hint_rect.position.x, maxf(150.0, viewport_size.y + hint_rect.position.y))
+	hint_container.size = Vector2(minf(hint_rect.size.x, maxf(1.0, viewport_size.x - 300.0)), hint_rect.size.y)
 	for line in hint_container.get_children():
 		line.size = Vector2(hint_container.size.x, PERSONAL_HINT_LINE_HEIGHT)
-	end_panel.size = Vector2(minf(viewport_size.x * 0.85, 620.0), 280.0)
-	end_panel.position = Vector2((viewport_size.x - end_panel.size.x) * 0.5, (viewport_size.y - end_panel.size.y) * 0.5)
-	end_label.size = Vector2(end_panel.size.x - 40, 110)
-	restart_button.position = Vector2((end_panel.size.x - 160) * 0.5, 190)
-	spectate_button.position = Vector2(end_panel.size.x * 0.5 + 10.0, 190)
+	var defeat_size := _ui_panel_size("defeat_panel_size", Vector2(620.0, 280.0), 0.90, 0.50)
+	end_panel.size = defeat_size
+	end_panel.position = _centered_ui_position(defeat_size, "defeat_panel_offset")
 	if watch_mode_button != null:
-		watch_mode_button.position = Vector2(maxf(8.0, viewport_size.x - 156.0), maxf(8.0, viewport_size.y - 58.0))
-		watch_mode_button.size = Vector2(148.0, 42.0)
+		var watch_rect := _ui_rect("watch_button_rect", Rect2(12.0, -58.0, 148.0, 42.0))
+		watch_mode_button.position = Vector2(watch_rect.position.x, maxf(8.0, viewport_size.y + watch_rect.position.y))
+		watch_mode_button.size = watch_rect.size
 	if cat_companion != null:
 		cat_companion.size = Vector2(viewport_size.x, 340.0)
 		cat_companion.position = Vector2.ZERO
 		cat_companion.position.y = maxf(8.0, viewport_size.y - 348.0)
 		cat_companion.set_viewport_size(viewport_size)
+	if settlement_ui != null:
+		settlement_ui.call("set_viewport_size", viewport_size)
 	update_camera_guides()
+
+func _apply_battle_hud_style() -> void:
+	if ui_config == null or stats_label == null:
+		return
+	stats_label.add_theme_font_size_override("font_size", ui_config.battle_gold_font_size)
+	stats_label.add_theme_color_override("font_color", ui_config.battle_text_color)
+	stats_label.add_theme_color_override("font_outline_color", ui_config.battle_text_outline_color)
+	fps_label.add_theme_font_size_override("font_size", ui_config.battle_fps_font_size)
+	fps_label.add_theme_color_override("font_outline_color", ui_config.battle_text_outline_color)
+	status_label.add_theme_font_size_override("font_size", ui_config.battle_status_font_size)
+	status_label.add_theme_color_override("font_color", ui_config.battle_text_color)
+	status_label.add_theme_color_override("font_outline_color", ui_config.battle_text_outline_color)
+	army_label.add_theme_font_size_override("font_size", ui_config.battle_army_font_size)
+	army_label.add_theme_color_override("font_color", ui_config.battle_secondary_text_color)
+	army_label.add_theme_color_override("font_outline_color", ui_config.battle_text_outline_color)
+	timer_label.add_theme_font_size_override("font_size", ui_config.battle_timer_font_size)
+	timer_label.add_theme_color_override("font_color", ui_config.battle_timer_color)
+	timer_label.add_theme_color_override("font_outline_color", ui_config.battle_timer_outline_color)
+	bombardment_banner.color = ui_config.battle_broadcast_color
+	bombardment_banner_label.add_theme_font_size_override("font_size", ui_config.battle_broadcast_font_size)
+	bombardment_banner_label.add_theme_color_override("font_color", ui_config.battle_broadcast_text_color)
+	var hq_background := StyleBoxFlat.new()
+	hq_background.bg_color = ui_config.battle_hq_health_background_color
+	hq_background.set_corner_radius_all(5)
+	var hq_fill := StyleBoxFlat.new()
+	hq_fill.bg_color = ui_config.battle_hq_health_fill_color
+	hq_fill.set_corner_radius_all(5)
+	hq_health_bar.add_theme_stylebox_override("background", hq_background)
+	hq_health_bar.add_theme_stylebox_override("fill", hq_fill)
+	if faction_stats_display != null:
+		faction_stats_display.call("configure_ui", ui_config)
+
+func _ui_rect(property_name: String, fallback: Rect2) -> Rect2:
+	if ui_config != null:
+		var value: Variant = ui_config.get(property_name)
+		if value is Rect2:
+			return value
+	return fallback
+
+func _capture_authored_hud_layout(preview_instance: Node) -> void:
+	authored_hud_layout.clear()
+	authored_hud_styles.clear()
+	for node_name in [
+		"GoldPanel", "GoldIcon", "GoldLabel", "FpsLabel", "PlayerInfoButton",
+		"HQHealthBar", "TimerLabel", "StatusLabel", "ArmyLabel", "FactionStatsDisplay",
+		"BroadcastPanel", "BottomStatusPanel", "BottomStatusLabel"
+	]:
+		var node := preview_instance.get_node_or_null(node_name) as Control
+		if node != null:
+			authored_hud_layout[node_name] = Rect2(node.position, node.size)
+			authored_hud_styles[node_name] = node.duplicate()
+	var broadcast_label := preview_instance.get_node_or_null("BroadcastPanel/BroadcastLabel") as Label
+	if broadcast_label != null:
+		authored_hud_styles["BroadcastLabel"] = broadcast_label.duplicate()
+
+func _authored_hud_rect(node_name: String, fallback: Rect2) -> Rect2:
+	if authored_hud_layout.has(node_name):
+		return Rect2(authored_hud_layout[node_name])
+	return fallback
+
+func _apply_authored_battle_hud_styles() -> void:
+	_apply_authored_control_style("PlayerInfoButton", player_info_button)
+	_apply_authored_control_style("GoldIcon", gold_icon)
+	_apply_authored_control_style("GoldLabel", stats_label)
+	_apply_authored_control_style("FpsLabel", fps_label)
+	_apply_authored_control_style("TimerLabel", timer_label)
+	_apply_authored_control_style("HQHealthBar", hq_health_bar)
+	_apply_authored_control_style("BroadcastPanel", bombardment_banner)
+	_apply_authored_control_style("BroadcastLabel", bombardment_banner_label)
+	_apply_authored_control_style("BottomStatusPanel", bottom_status_panel)
+	if authored_hud_styles.has("PlayerInfoButton"):
+		var authored_button := authored_hud_styles["PlayerInfoButton"] as Button
+		player_info_button.icon = authored_button.icon if authored_button.icon != null else CASTLE_INFO_ICON
+		player_info_button.expand_icon = authored_button.expand_icon
+
+func _apply_authored_control_style(node_name: String, target: Control) -> void:
+	if target == null or not authored_hud_styles.has(node_name):
+		return
+	var source := authored_hud_styles[node_name] as Control
+	if source == null:
+		return
+	for color_name in ["font_color", "font_hover_color", "font_pressed_color", "font_disabled_color", "font_outline_color"]:
+		if source.has_theme_color_override(color_name):
+			target.add_theme_color_override(color_name, source.get_theme_color(color_name))
+	for size_name in ["font_size"]:
+		if source.has_theme_font_size_override(size_name):
+			target.add_theme_font_size_override(size_name, source.get_theme_font_size(size_name))
+	for constant_name in ["outline_size"]:
+		if source.has_theme_constant_override(constant_name):
+			target.add_theme_constant_override(constant_name, source.get_theme_constant(constant_name))
+	for style_name in ["normal", "hover", "pressed", "focus", "disabled", "panel", "background", "fill"]:
+		if source.has_theme_stylebox_override(style_name):
+			var style := source.get_theme_stylebox(style_name)
+			if style != null:
+				target.add_theme_stylebox_override(style_name, style.duplicate())
+
+func _ui_panel_size(property_name: String, fallback: Vector2, max_width_ratio: float, max_height_ratio: float) -> Vector2:
+	var desired := fallback
+	if ui_config != null:
+		var value: Variant = ui_config.get(property_name)
+		if value is Vector2 and value.x > 0.0 and value.y > 0.0:
+			desired = value
+	return Vector2(
+		minf(desired.x, maxf(240.0, viewport_size.x * max_width_ratio)),
+		minf(desired.y, maxf(180.0, viewport_size.y * max_height_ratio))
+	)
+
+func _centered_ui_position(panel_size: Vector2, offset_property: String) -> Vector2:
+	var offset := Vector2.ZERO
+	if ui_config != null:
+		var value: Variant = ui_config.get(offset_property)
+		if value is Vector2:
+			offset = value
+	return (viewport_size - panel_size) * 0.5 + offset
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_SIZE_CHANGED:
@@ -1680,6 +1871,7 @@ func update_state(time_left: float, player_gold: int, _ai_gold: int, player_hp: 
 		return
 	stats_label.text = "金币  %d" % player_gold
 	if merchant_shop_overlay != null and merchant_shop_overlay.visible:
+		_update_merchant_gold(player_gold)
 		_update_merchant_price_colors(player_gold)
 	if faction_scores.is_empty():
 		status_label.text = "领地  %02d : %02d" % [player_tiles, ai_tiles]
@@ -1721,7 +1913,11 @@ func _refresh_fps_label() -> void:
 		return
 	var fps := Engine.get_frames_per_second()
 	fps_label.text = "FPS %d" % fps
-	var fps_color := Color("#4ade80") if fps >= 50 else (Color("#facc15") if fps >= 30 else Color("#f87171"))
+	var fps_color := ui_config.battle_fps_good_color if ui_config != null else Color("#4ade80")
+	if fps < 30:
+		fps_color = ui_config.battle_fps_bad_color if ui_config != null else Color("#f87171")
+	elif fps < 50:
+		fps_color = ui_config.battle_fps_warning_color if ui_config != null else Color("#facc15")
 	fps_label.add_theme_color_override("font_color", fps_color)
 
 func show_hint(message: String) -> void:
@@ -1778,11 +1974,19 @@ func flash_building_damage() -> void:
 func show_world_broadcast(message: String, duration: float = Config.INTELLIGENCE_BROADCAST_DURATION) -> void:
 	world_broadcast_message = message
 	world_broadcast_remaining = maxf(0.0, duration)
+	world_broadcast_faction = -1
+	_refresh_broadcast_banner()
+
+func show_faction_elimination_broadcast(faction_name: String, faction: int, duration: float = Config.INTELLIGENCE_BROADCAST_DURATION) -> void:
+	world_broadcast_message = "%s已淘汰" % faction_name
+	world_broadcast_remaining = maxf(0.0, duration)
+	world_broadcast_faction = faction
 	_refresh_broadcast_banner()
 
 func hide_world_broadcast() -> void:
 	world_broadcast_message = ""
 	world_broadcast_remaining = 0.0
+	world_broadcast_faction = -1
 	_refresh_broadcast_banner()
 
 func play_divination_event(data: Dictionary) -> void:
@@ -1795,15 +1999,21 @@ func _start_next_divination_event() -> void:
 		divination_event_running = false
 		divination_event_current = {}
 		divination_roll_emitted = false
+		if divination_root:
+			divination_root.visible = false
 		if divination_overlay:
 			divination_overlay.visible = false
 		return
 	divination_event_current = divination_event_queue.pop_front()
 	divination_event_running = true
 	divination_roll_emitted = false
+	if divination_root:
+		divination_root.visible = true
 	divination_overlay.visible = true
 	divination_title.text = "占卜屋"
 	divination_target.text = "目标选择中..."
+	divination_target_display.clear_target()
+	divination_target_display.visible = false
 	divination_event_label.text = "等待目标确定"
 	divination_result.text = "请等待占卜结果"
 	if divination_event_tween != null and divination_event_tween.is_valid():
@@ -1824,7 +2034,10 @@ func _show_divination_target_preview(target_type_name: String) -> void:
 	divination_target.text = "%s：占卜中..." % target_type_name
 
 func _show_divination_target_result() -> void:
-	divination_target.text = "%s：%s" % [str(divination_event_current.get("target_type_name", "目标")), str(divination_event_current.get("target_name", "未知"))]
+	divination_target.text = "%s：已选中目标" % str(divination_event_current.get("target_type_name", "目标"))
+	if divination_target_display != null:
+		divination_target_display.set_target(int(divination_event_current.get("target", 0)), str(divination_event_current.get("target_name", "未知")))
+		divination_target_display.visible = true
 
 func _start_divination_event_roll() -> void:
 	if not divination_event_running:
@@ -1875,6 +2088,8 @@ func _emit_divination_roll() -> void:
 func _close_divination_before_result() -> void:
 	if not divination_event_running:
 		return
+	if divination_root:
+		divination_root.visible = false
 	if divination_overlay:
 		divination_overlay.visible = false
 	divination_roll_finished.emit(divination_event_current.get("fate_cell", Vector2i(999, 999)))
@@ -1898,6 +2113,8 @@ func clear_divination_events() -> void:
 	divination_event_current = {}
 	divination_roll_emitted = false
 	divination_event_running = false
+	if divination_root:
+		divination_root.visible = false
 	if divination_overlay:
 		divination_overlay.visible = false
 
@@ -1929,6 +2146,22 @@ func hide_result() -> void:
 	if end_panel:
 		end_panel.visible = false
 
+func show_settlement(match_time: float, faction_rows: Array, player_row: Dictionary) -> void:
+	clear_camera_guides()
+	if end_panel != null:
+		end_panel.visible = false
+	if watch_mode_button != null:
+		watch_mode_button.visible = false
+	if settlement_ui != null:
+		settlement_ui.call("show_settlement", match_time, faction_rows, player_row)
+
+func hide_settlement() -> void:
+	if settlement_ui != null:
+		settlement_ui.call("hide_settlement")
+
+func _on_settlement_confirmed() -> void:
+	hide_settlement()
+
 func _on_restart_pressed() -> void:
 	_close_player_info()
 	clear_camera_guides()
@@ -1944,10 +2177,46 @@ func _on_spectate_pressed() -> void:
 func _on_exit_spectator_pressed() -> void:
 	get_tree().quit()
 
+func _apply_flat_popup_theme() -> void:
+	# Apply the same flat treatment to every modal while leaving map HUD controls
+	# and content illustrations outside the modal theme boundary.
+	var popup_panels: Array[Panel] = [
+		end_panel,
+		player_info_panel,
+		equipment_detail_panel,
+		equipment_replacement_panel,
+		card_event_panel,
+		divination_panel,
+		intelligence_news_panel,
+		merchant_arrival_panel
+	]
+	for panel in popup_panels:
+		if panel == null:
+			continue
+		if panel == divination_panel or panel == merchant_shop_panel or panel == end_panel:
+			continue
+		panel.add_theme_stylebox_override("panel", Art.flat_panel_style(Art.POPUP_BACKGROUND_ALT if panel == divination_panel or panel == card_event_panel or panel == merchant_arrival_panel or panel == player_info_panel else Art.POPUP_BACKGROUND))
+		_apply_flat_popup_children(panel)
+	if player_info_button != null:
+		Art.apply_flat_button(player_info_button, Art.POPUP_ACCENT)
+
+func _apply_flat_popup_children(root: Node) -> void:
+	for child in root.get_children():
+		if child is Button:
+			Art.apply_flat_button(child as Button, Art.POPUP_ACCENT)
+		elif child is Label:
+			var label := child as Label
+			label.add_theme_color_override("font_color", Art.POPUP_TEXT)
+			label.add_theme_color_override("font_outline_color", Color.TRANSPARENT)
+			label.add_theme_constant_override("outline_size", 0)
+		_apply_flat_popup_children(child)
+
 # Run once after the dynamic HUD is built so every action shares the same
 # rounded, outlined and vertically-pressed cartoon button treatment.
 func _apply_cartoon_buttons(root: Node) -> void:
 	for child in root.get_children():
+		if child == merchant_shop_overlay:
+			continue
 		if child is Button:
 			var button := child as Button
 			var color := Art.SKY
