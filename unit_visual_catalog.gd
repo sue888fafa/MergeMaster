@@ -37,11 +37,17 @@ static func _ensure_profiles() -> void:
 		var profile_id: String = PROFILE_IDS[index]
 		var atlas_path := "%s/%s_base.png" % [RUNTIME_ROOT, profile_id]
 		var mask_path := "%s/%s_mask.png" % [RUNTIME_ROOT, profile_id]
+		if profile_id == "warrior":
+			atlas_path = "%s/%s_anim_base.png" % [RUNTIME_ROOT, profile_id]
+			mask_path = "%s/%s_anim_mask.png" % [RUNTIME_ROOT, profile_id]
 		if ResourceLoader.exists(atlas_path):
 			var mask_texture: Texture2D = null
 			if ResourceLoader.exists(mask_path):
 				mask_texture = load(mask_path) as Texture2D
-			profile.configure_directional_atlas(profile_id, load(atlas_path) as Texture2D, mask_texture)
+			if profile_id == "warrior":
+				profile.configure_atlas(profile_id, load(atlas_path) as Texture2D, mask_texture)
+			else:
+				profile.configure_directional_atlas(profile_id, load(atlas_path) as Texture2D, mask_texture)
 		else:
 			profile.configure_static(profile_id, UNIT_ART[index], UNIT_MASKS[index])
 		_profiles.append(profile)

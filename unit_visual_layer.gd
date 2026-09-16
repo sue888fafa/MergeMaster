@@ -11,8 +11,8 @@ const LOD_FAR := 2
 const NEAR_ZOOM := 0.85
 const MID_ZOOM := 0.65
 const NEAR_REFRESH := 1.0 / 24.0
-const MID_REFRESH := 1.0 / 12.0
-const FAR_REFRESH := 1.0 / 8.0
+const MID_REFRESH := 1.0 / 8.0
+const FAR_REFRESH := 1.0 / 4.0
 const DEPTH_BUCKET_COUNT := 8
 const DEATH_DURATION := 0.60
 
@@ -223,15 +223,16 @@ func _update_profile_instances(class_index: int, bucket_index: int, entries: Arr
 
 func _update_decorative_instances(units: Array) -> void:
 	var shadow_units: Array = [] if current_lod == LOD_FAR else units
+	var halo_units: Array = [] if current_lod == LOD_FAR else units
 	_prepare_instances(shadow_renderer.multimesh, shadow_units.size())
 	for index in range(shadow_units.size()):
 		var unit = shadow_units[index]
 		var scale := float(Config.UNIT_LEVEL_VISUAL_SCALE[clampi(int(unit.barracks_level), 1, 4) - 1]) * Config.UNIT_DISPLAY_SCALE
 		shadow_renderer.multimesh.set_instance_transform_2d(index, Transform2D(0.0, Vector2(scale, scale), 0.0, unit.position + Vector2(2.0, 15.0) * scale))
 		shadow_renderer.multimesh.set_instance_color(index, Color.WHITE)
-	_prepare_instances(halo_renderer.multimesh, units.size())
-	for index in range(units.size()):
-		var unit = units[index]
+	_prepare_instances(halo_renderer.multimesh, halo_units.size())
+	for index in range(halo_units.size()):
+		var unit = halo_units[index]
 		var scale := float(Config.UNIT_LEVEL_VISUAL_SCALE[clampi(int(unit.barracks_level), 1, 4) - 1]) * Config.UNIT_DISPLAY_SCALE
 		var halo_color := Color(0.35, 0.9, 1.0, 0.72) if bool(unit.is_frozen()) else Color(_faction_color(int(unit.faction)), 0.20)
 		halo_renderer.multimesh.set_instance_transform_2d(index, Transform2D(0.0, Vector2(scale, scale), 0.0, unit.position + Vector2(0.0, 5.0) * scale))
@@ -239,11 +240,7 @@ func _update_decorative_instances(units: Array) -> void:
 	var damaged: Array = []
 	if current_lod != LOD_FAR:
 		for unit in units:
-			var combat_target = unit.get("combat_target")
-			var in_combat: bool = false
-			if combat_target is Dictionary:
-				in_combat = not combat_target.is_empty()
-			if float(unit.hp) < float(unit.max_hp) or in_combat:
+			if float(unit.hp) < float(unit.max_hp) and (int(unit.faction) == Config.FACTION_PLAYER or bool(unit.has_fought_player)):
 				damaged.append(unit)
 	_prepare_instances(health_back_renderer.multimesh, damaged.size())
 	_prepare_instances(health_fill_renderer.multimesh, damaged.size())

@@ -1,4 +1,4 @@
-[gd_scene load_steps=10 format=3]
+[gd_scene load_steps=12 format=3]
 
 [ext_resource type="Script" path="res://main.gd" id="1_main"]
 [ext_resource type="Script" path="res://hex_board.gd" id="2_board"]
@@ -9,6 +9,8 @@
 [ext_resource type="Script" path="res://bombardment_effect.gd" id="7_bombardment"]
 [ext_resource type="Script" path="res://unit_visual_layer.gd" id="8_unit_visual_layer"]
 [ext_resource type="Resource" path="res://ui_editor_config.tres" id="9_ui_config"]
+[ext_resource type="Script" path="res://audio_manager.gd" id="10_audio_manager"]
+[ext_resource type="AudioStream" path="res://assets/audio/helios.mp3" id="11_music"]
 [node name="Main" type="Node2D"]
 script = ExtResource("1_main")
 
@@ -34,6 +36,10 @@ script = ExtResource("4_building")
 script = ExtResource("8_unit_visual_layer")
 
 [node name="EquipmentEffects" type="Node2D" parent="."]
+
+[node name="AudioManager" type="Node" parent="."]
+script = ExtResource("10_audio_manager")
+music_stream = ExtResource("11_music")
 
 [node name="FateEffects" type="Node2D" parent="."]
 

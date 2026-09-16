@@ -8,10 +8,11 @@ var faction := 2
 func setup(controller: Node, owner: int = 2) -> void:
 	main_ref = controller
 	faction = owner
-	think_timer = 1.0
+	# Offset factions so their board scans do not land on the same frame.
+	think_timer = 0.45 + float(owner % 3) * 0.20
 
 func reset() -> void:
-	think_timer = 1.0
+	think_timer = 0.45 + float(faction % 3) * 0.20
 
 func _process(delta: float) -> void:
 	if main_ref == null or main_ref.game_over:

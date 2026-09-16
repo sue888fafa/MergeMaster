@@ -1891,7 +1891,7 @@ func _headquarters_art_for_faction(faction: int) -> Texture2D:
 func _draw_player_hq_identity(center: Vector2, player_name: String) -> void:
 	# Keep the identity badge above the headquarters silhouette so its frame never
 	# covers the roof or other faction-identifying details.
-	var badge_center := center + Vector2(0.0, -88.0)
+	var badge_center := center + Vector2(0.0, -70.0)
 	var badge_width := 74.0
 	var badge_height := 22.0
 	var badge_rect := Rect2(badge_center - Vector2(badge_width, badge_height) * 0.5, Vector2(badge_width, badge_height))

@@ -18,6 +18,8 @@ const FactionAvatarScript := preload("res://faction_avatar.gd")
 const SettlementUIScript := preload("res://settlement_ui.gd")
 const GOLD_ICON := preload("res://assets/generated/ui/coin.png")
 const CASTLE_INFO_ICON := preload("res://assets/generated/ui/castle_info.png")
+const BARRACKS_ICON := preload("res://assets/generated/ui/barracks_icon.png")
+const SOLDIER_ICON := preload("res://assets/generated/ui/soldier_icon.png")
 const BATTLE_HUD_PREVIEW_SCENE := preload("res://BattleHUDPreview.tscn")
 
 @export_category("UI编辑")
@@ -38,8 +40,16 @@ var status_label: Label
 var stats_label: Label
 var gold_icon: TextureRect
 var gold_panel: Panel
+var player_avatar: Control
+var player_summary: Control
+var player_name_label: Label
+var barracks_count_label: Label
+var soldier_count_label: Label
+var player_eliminated_label: Label
 var authored_hud_layout: Dictionary = {}
+var authored_control_layout: Dictionary = {}
 var authored_hud_styles: Dictionary = {}
+var authored_faction_stats_layout: Dictionary = {}
 var fps_label: Label
 var army_label: Label
 var faction_stats_display: Control
@@ -48,6 +58,9 @@ var hq_health_bar: ProgressBar
 var hint_label: Label
 var hint_container: Control
 var hint_messages: Array[String] = []
+var card_hint_panel: Panel
+var card_hint_label: Label
+var card_hint_tween: Tween
 var bombardment_banner: ColorRect
 var bombardment_banner_label: Label
 var broadcast_faction_avatar: Control
@@ -158,7 +171,7 @@ var building_damage_edge: Panel
 var building_damage_edge_tween: Tween
 var viewport_size := Vector2.ZERO
 var camera_guide_refresh_timer := 0.0
-const CAMERA_GUIDE_REFRESH_INTERVAL := 0.10
+const CAMERA_GUIDE_REFRESH_INTERVAL := 0.20
 var fps_refresh_timer := 0.0
 const FPS_REFRESH_INTERVAL := 0.25
 var last_camera_transform := Transform2D.IDENTITY
@@ -169,6 +182,7 @@ var cached_enemy_territory_near_player := false
 const PERSONAL_HINT_LINE_HEIGHT := 24.0
 const PERSONAL_HINT_VISIBLE_LINES := 3.5
 const PERSONAL_HINT_MAX_LINES := 4
+const FACTION_STATS_RUNTIME_X_OFFSET := 150.0
 
 func setup(controller: Node) -> void:
 	main_ref = controller
@@ -210,12 +224,14 @@ func _build_ui() -> void:
 		gold_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		gold_panel.z_index = 0
 		add_child(gold_panel)
-	preview_instance.free()
 	player_info_button = Button.new()
+	player_info_button.name = "PlayerInfoButton"
 	player_info_button.text = ""
 	player_info_button.tooltip_text = "城堡信息"
 	player_info_button.icon = CASTLE_INFO_ICON
 	player_info_button.expand_icon = true
+	player_info_button.mouse_filter = Control.MOUSE_FILTER_STOP
+	player_info_button.z_index = 25
 	player_info_button.position = Vector2(16, 78)
 	player_info_button.size = Vector2(48, 48)
 	player_info_button.add_theme_font_size_override("font_size", 26)
@@ -233,6 +249,7 @@ func _build_ui() -> void:
 	add_child(bottom_status_panel)
 
 	stats_label = Label.new()
+	stats_label.name = "GoldLabel"
 	stats_label.add_theme_font_size_override("font_size", 18)
 	stats_label.add_theme_color_override("font_color", Color("#f8fafc"))
 	stats_label.add_theme_color_override("font_outline_color", Color("#000000"))
@@ -249,6 +266,49 @@ func _build_ui() -> void:
 	gold_icon.z_index = 1
 	add_child(gold_icon)
 
+	player_avatar = FactionAvatarScript.new()
+	player_avatar.name = "PlayerAvatar"
+	player_avatar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(player_avatar)
+	player_name_label = Label.new()
+	player_name_label.name = "PlayerNameLabel"
+	player_name_label.text = "Helios"
+	player_name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	player_name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(player_name_label)
+	player_summary = Control.new()
+	player_summary.name = "PlayerSummary"
+	player_summary.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(player_summary)
+	var barracks_icon := TextureRect.new()
+	barracks_icon.name = "BarracksIcon"
+	barracks_icon.texture = BARRACKS_ICON
+	barracks_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	barracks_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	barracks_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	player_summary.add_child(barracks_icon)
+	barracks_count_label = Label.new()
+	barracks_count_label.name = "BarracksCountLabel"
+	_configure_summary_count_label(barracks_count_label)
+	player_summary.add_child(barracks_count_label)
+	var soldier_icon := TextureRect.new()
+	soldier_icon.name = "SoldierIcon"
+	soldier_icon.texture = SOLDIER_ICON
+	soldier_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	soldier_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	soldier_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	player_summary.add_child(soldier_icon)
+	soldier_count_label = Label.new()
+	soldier_count_label.name = "SoldierCountLabel"
+	_configure_summary_count_label(soldier_count_label)
+	player_summary.add_child(soldier_count_label)
+	player_eliminated_label = Label.new()
+	player_eliminated_label.name = "EliminatedLabel"
+	_configure_summary_count_label(player_eliminated_label)
+	player_eliminated_label.add_theme_color_override("font_color", Color("#fca5a5"))
+	player_eliminated_label.visible = false
+	player_summary.add_child(player_eliminated_label)
+
 	fps_label = Label.new()
 	fps_label.name = "FpsLabel"
 	fps_label.text = "FPS --"
@@ -261,6 +321,7 @@ func _build_ui() -> void:
 	_refresh_fps_label()
 
 	status_label = Label.new()
+	status_label.name = "StatusLabel"
 	status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	status_label.add_theme_font_size_override("font_size", 13)
 	status_label.add_theme_color_override("font_color", Color("#f8fafc"))
@@ -271,6 +332,7 @@ func _build_ui() -> void:
 	add_child(status_label)
 
 	army_label = Label.new()
+	army_label.name = "ArmyLabel"
 	army_label.name = "ArmyCountLabel"
 	army_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	army_label.add_theme_font_size_override("font_size", 13)
@@ -285,10 +347,12 @@ func _build_ui() -> void:
 	faction_stats_display.name = "FactionStatsDisplay"
 	faction_stats_display.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	faction_stats_display.call("configure_ui", ui_config)
+	if faction_stats_display.has_method("configure_authored_layout"):
+		faction_stats_display.call("configure_authored_layout", authored_faction_stats_layout)
 	add_child(faction_stats_display)
 
 	hq_health_bar = ProgressBar.new()
-	hq_health_bar.name = "PlayerHQHealthBar"
+	hq_health_bar.name = "HQHealthBar"
 	hq_health_bar.max_value = Config.HQ_MAX_HP
 	hq_health_bar.value = Config.HQ_MAX_HP
 	hq_health_bar.show_percentage = false
@@ -305,6 +369,7 @@ func _build_ui() -> void:
 	add_child(hq_health_bar)
 
 	timer_label = Label.new()
+	timer_label.name = "TimerLabel"
 	timer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	timer_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	timer_label.add_theme_font_size_override("font_size", 22)
@@ -320,6 +385,7 @@ func _build_ui() -> void:
 	bombardment_banner.visible = false
 	add_child(bombardment_banner)
 	bombardment_banner_label = Label.new()
+	bombardment_banner_label.name = "BroadcastLabel"
 	bombardment_banner_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	bombardment_banner_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	bombardment_banner_label.add_theme_font_size_override("font_size", 19)
@@ -376,6 +442,7 @@ func _build_ui() -> void:
 		if index == 0:
 			hint_label = line
 	_render_hint_history()
+	_build_card_hint_toast()
 
 	var defeat_scene := preload("res://DefeatUI.tscn")
 	var defeat_ui: Control = defeat_scene.instantiate()
@@ -417,6 +484,17 @@ func _build_ui() -> void:
 	add_child(settlement_ui)
 	settlement_ui.call("configure_ui", ui_config)
 	settlement_ui.connect("confirmed", _on_settlement_confirmed)
+	# BattleHUDPreview.tscn is the single source of truth for authored HUD
+	# node positions and sizes. Keep this independent of the legacy layout flag.
+	_apply_authored_hud_template(preview_instance)
+	# The scene is the source for visual layout, but this control must always
+	# remain interactive after authored properties are copied.
+	player_info_button.mouse_filter = Control.MOUSE_FILTER_STOP
+	player_info_button.z_index = maxi(player_info_button.z_index, 25)
+	var castle_label := get_node_or_null("CastleLabel") as Control
+	if castle_label != null:
+		castle_label.z_index = maxi(castle_label.z_index, player_info_button.z_index + 1)
+	preview_instance.free()
 	_layout_ui()
 	update_camera_guides()
 
@@ -662,6 +740,31 @@ func _build_camera_guides() -> void:
 	player_camera_guide_icon.connect("clicked", _on_player_camera_guide_clicked)
 	player_camera_guide_icon.visible = false
 	add_child(player_camera_guide_icon)
+
+func _build_card_hint_toast() -> void:
+	card_hint_panel = Panel.new()
+	card_hint_panel.name = "CardHintToast"
+	card_hint_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card_hint_panel.visible = false
+	card_hint_panel.z_index = 60
+	var style := StyleBoxFlat.new()
+	style.bg_color = ui_config.card_hint_background_color if ui_config != null else Color(0.02, 0.04, 0.08, 0.68)
+	style.set_corner_radius_all(8)
+	card_hint_panel.add_theme_stylebox_override("panel", style)
+	add_child(card_hint_panel)
+	card_hint_label = Label.new()
+	card_hint_label.name = "CardHintText"
+	card_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	card_hint_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	card_hint_label.add_theme_font_size_override("font_size", ui_config.card_hint_font_size if ui_config != null else 18)
+	card_hint_label.add_theme_color_override("font_color", Color.WHITE)
+	card_hint_label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.75))
+	card_hint_label.add_theme_constant_override("outline_size", 3)
+	card_hint_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card_hint_panel.add_child(card_hint_label)
+
+func _is_card_related_hint(message: String) -> bool:
+	return message.contains("卡片") or message.contains("卡牌") or message.contains("抽卡") or message.contains("窃取")
 
 func _on_enemy_camera_guide_clicked() -> void:
 	_focus_nearest_enemy_territory()
@@ -1249,7 +1352,19 @@ func _build_divination_panel() -> void:
 	for icon_name in ["Card", "Barracks", "Loss", "Gold", "Rise", "Fall"]:
 		divination_event_icons.append(divination_ui.get_node("DivinationHouse/EventIcon%s" % icon_name) as Label)
 	divination_event_label = divination_ui.get_node("DivinationHouse/DivinationEventLabel") as Label
-	divination_result = divination_ui.get_node("DivinationHouse/DivinationResult") as Label
+	divination_result = divination_ui.get_node_or_null("DivinationHouse/DivinationResult") as Label
+	if divination_result == null:
+		# Older DivinationUI scenes may not contain the result label. Create the
+		# compatible runtime node so the event flow never writes through null.
+		divination_result = Label.new()
+		divination_result.name = "DivinationResult"
+		divination_result.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		divination_result.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		divination_result.add_theme_font_size_override("font_size", 17)
+		divination_result.add_theme_color_override("font_color", Art.INK_SOFT)
+		divination_result.position = Vector2(24.0, 402.0)
+		divination_result.size = Vector2(572.0, 42.0)
+		divination_panel.add_child(divination_result)
 
 func _build_intelligence_news_panel() -> void:
 	intelligence_news_overlay = ColorRect.new()
@@ -1519,6 +1634,8 @@ func _layout_ui() -> void:
 	if stats_label == null:
 		return
 	viewport_size = get_viewport().get_visible_rect().size
+	if card_hint_panel != null and card_hint_panel.visible:
+		card_hint_panel.position = (viewport_size - card_hint_panel.size) * 0.5
 	if camera_guide_layer != null:
 		camera_guide_layer.size = viewport_size
 		var guide_rect := Rect2(42.0, 184.0, maxf(1.0, viewport_size.x - 84.0), maxf(1.0, viewport_size.y - 266.0))
@@ -1678,6 +1795,18 @@ func _layout_ui() -> void:
 	var gold_icon_rect := _authored_hud_rect("GoldIcon", _ui_rect("gold_icon_rect", Rect2(16.0, 14.0, 28.0, 28.0)))
 	gold_icon.position = gold_icon_rect.position
 	gold_icon.size = gold_icon_rect.size
+	if player_avatar != null:
+		var player_avatar_rect := _authored_hud_rect("PlayerAvatar", Rect2(16.0, 52.0, 48.0, 48.0))
+		player_avatar.position = player_avatar_rect.position
+		player_avatar.size = player_avatar_rect.size
+	if player_name_label != null:
+		var player_name_rect := _authored_hud_rect("PlayerNameLabel", Rect2(16.0, 4.0, 120.0, 24.0))
+		player_name_label.position = player_name_rect.position
+		player_name_label.size = player_name_rect.size
+	if player_summary != null:
+		var player_summary_rect := _authored_hud_rect("PlayerSummary", Rect2(138.0, 21.0, 120.0, 48.0))
+		player_summary.position = player_summary_rect.position
+		player_summary.size = player_summary_rect.size
 	var gold_label_rect := _authored_hud_rect("GoldLabel", _ui_rect("gold_label_rect", Rect2(48.0, 14.0, 118.0, 34.0)))
 	stats_label.position = gold_label_rect.position
 	stats_label.size = gold_label_rect.size
@@ -1691,17 +1820,21 @@ func _layout_ui() -> void:
 	army_label.position = army_rect.position
 	army_label.size = army_rect.size
 	if faction_stats_display != null:
-		var required_faction_stats_size := Vector2(42.0 + float(Config.FACTION_IDS.size()) * ui_config.faction_stats_column_spacing, 78.0)
-		var configured_faction_stats_size := ui_config.faction_stats_size
 		var faction_stats_size := Vector2(
-			maxf(ui_config.faction_stats_minimum_size.x, maxf(configured_faction_stats_size.x, required_faction_stats_size.x)),
-			maxf(ui_config.faction_stats_minimum_size.y, maxf(configured_faction_stats_size.y, required_faction_stats_size.y))
+			maxf(ui_config.faction_stats_minimum_size.x, ui_config.faction_stats_size.x),
+			maxf(ui_config.faction_stats_minimum_size.y, ui_config.faction_stats_size.y)
 		)
-		var authored_faction_rect := _authored_hud_rect("FactionStatsDisplay", Rect2(Vector2.ZERO, faction_stats_size))
-		faction_stats_display.size = authored_faction_rect.size if authored_hud_layout.has("FactionStatsDisplay") else faction_stats_size
-		faction_stats_display.position = authored_faction_rect.position if authored_hud_layout.has("FactionStatsDisplay") else Vector2(
-			maxf(8.0, viewport_size.x - faction_stats_display.size.x + ui_config.faction_stats_position.x),
-			ui_config.faction_stats_position.y
+		var faction_stats_position := ui_config.faction_stats_position
+		if authored_faction_stats_layout.has("root"):
+			var authored_root: Rect2 = authored_faction_stats_layout["root"]
+			faction_stats_size = authored_root.size
+			# The preview is authored at 720px wide. Preserve its right/top
+			# anchoring when the actual phone viewport has another width.
+			faction_stats_position = Vector2(authored_root.position.x + authored_root.size.x - 720.0, authored_root.position.y)
+		faction_stats_display.size = faction_stats_size
+		faction_stats_display.position = Vector2(
+			maxf(8.0, viewport_size.x - faction_stats_display.size.x + faction_stats_position.x),
+			maxf(0.0, faction_stats_position.y)
 		)
 	var hq_rect := _authored_hud_rect("HQHealthBar", _ui_rect("hq_health_bar_rect", Rect2(16.0, 50.0, 142.0, 10.0)))
 	hq_health_bar.position = hq_rect.position
@@ -1746,6 +1879,10 @@ func _layout_ui() -> void:
 		cat_companion.set_viewport_size(viewport_size)
 	if settlement_ui != null:
 		settlement_ui.call("set_viewport_size", viewport_size)
+	_restore_authored_control_layout()
+	if faction_stats_display != null:
+		var authored_stats_rect := _authored_hud_rect("FactionStatsDisplay", Rect2(faction_stats_display.position, faction_stats_display.size))
+		faction_stats_display.position.x = authored_stats_rect.position.x + FACTION_STATS_RUNTIME_X_OFFSET
 	update_camera_guides()
 
 func _apply_battle_hud_style() -> void:
@@ -1788,19 +1925,185 @@ func _ui_rect(property_name: String, fallback: Rect2) -> Rect2:
 
 func _capture_authored_hud_layout(preview_instance: Node) -> void:
 	authored_hud_layout.clear()
+	authored_control_layout.clear()
 	authored_hud_styles.clear()
+	authored_faction_stats_layout.clear()
 	for node_name in [
 		"GoldPanel", "GoldIcon", "GoldLabel", "FpsLabel", "PlayerInfoButton",
-		"HQHealthBar", "TimerLabel", "StatusLabel", "ArmyLabel", "FactionStatsDisplay",
+		"PlayerAvatar", "PlayerNameLabel", "PlayerSummary", "HQHealthBar", "TimerLabel", "StatusLabel", "ArmyLabel", "FactionStatsDisplay",
 		"BroadcastPanel", "BottomStatusPanel", "BottomStatusLabel"
 	]:
-		var node := preview_instance.get_node_or_null(node_name) as Control
+		var node := preview_instance.get_node_or_null(NodePath(node_name)) as Control
 		if node != null:
 			authored_hud_layout[node_name] = Rect2(node.position, node.size)
 			authored_hud_styles[node_name] = node.duplicate()
+			_capture_authored_control_layout(node, node_name)
 	var broadcast_label := preview_instance.get_node_or_null("BroadcastPanel/BroadcastLabel") as Label
 	if broadcast_label != null:
 		authored_hud_styles["BroadcastLabel"] = broadcast_label.duplicate()
+	var authored_stats := preview_instance.get_node_or_null("FactionStatsAuthoring") as Control
+	if authored_stats != null:
+		authored_faction_stats_layout["root"] = Rect2(authored_stats.position, authored_stats.size)
+		var cards: Dictionary = {}
+		for card_name in ["PlayerCard", "RedCard", "PurpleCard", "GreenCard"]:
+			var card := authored_stats.get_node_or_null(NodePath(card_name)) as Control
+			if card == null:
+				continue
+			var card_data: Dictionary = {"rect": Rect2(card.position, card.size)}
+			for child_name in ["Avatar", "RankIcon", "Name", "TileIcon", "TileCount"]:
+				var child := card.get_node_or_null(NodePath(child_name)) as Control
+				if child == null:
+					continue
+				var child_data: Dictionary = {"rect": Rect2(child.position, child.size)}
+				if child is TextureRect:
+					child_data["texture"] = (child as TextureRect).texture
+				card_data[child_name] = child_data
+			cards[card_name] = card_data
+		authored_faction_stats_layout["cards"] = cards
+
+func _capture_authored_control_layout(node: Control, node_path: String) -> void:
+	if node == null:
+		return
+	authored_control_layout[node_path] = Rect2(node.position, node.size)
+	for child in node.get_children():
+		var child_control := child as Control
+		if child_control == null:
+			continue
+		_capture_authored_control_layout(child_control, "%s/%s" % [node_path, child_control.name])
+
+func _restore_authored_control_layout() -> void:
+	for node_path in authored_control_layout:
+		var path_parts := str(node_path).split("/")
+		if path_parts.is_empty():
+			continue
+		var target := _authored_runtime_target(path_parts[0])
+		if target == null:
+			target = get_node_or_null(NodePath(path_parts[0])) as Control
+		for index in range(1, path_parts.size()):
+			if target == null:
+				break
+			target = target.get_node_or_null(NodePath(path_parts[index])) as Control
+		if target == null:
+			continue
+		var authored_rect: Rect2 = authored_control_layout[node_path]
+		target.position = authored_rect.position
+		target.size = authored_rect.size
+
+func _apply_authored_hud_template(preview_instance: Node) -> void:
+	if preview_instance == null:
+		return
+	for source_child in preview_instance.get_children():
+		var source_control := source_child as Control
+		if source_control == null or source_control.name in ["Backdrop", "FactionStatsAuthoring", "FactionStatsDisplay"]:
+			if source_control != null and source_control.name == "Backdrop":
+				_copy_authored_extra_children(source_control, self)
+			if source_control != null and source_control.name == "FactionStatsAuthoring":
+				_copy_authored_extra_children(source_control, self, source_control.position)
+			continue
+		var target := _authored_runtime_target(source_control.name)
+		if target == null:
+			if get_node_or_null(NodePath(source_control.name)) == null:
+				add_child(source_control.duplicate())
+			continue
+		_copy_authored_control(source_control, target)
+		_copy_authored_extra_children(source_control, target)
+
+func _authored_runtime_target(node_name: String) -> Control:
+	match node_name:
+		"GoldPanel": return gold_panel
+		"GoldIcon": return gold_icon
+		"GoldLabel": return stats_label
+		"FpsLabel": return fps_label
+		"PlayerInfoButton": return player_info_button
+		"PlayerAvatar": return player_avatar
+		"PlayerNameLabel": return player_name_label
+		"PlayerSummary": return player_summary
+		"HQHealthBar": return hq_health_bar
+		"TimerLabel": return timer_label
+		"StatusLabel": return status_label
+		"ArmyLabel": return army_label
+		"FactionStatsDisplay": return faction_stats_display
+		"BroadcastPanel": return bombardment_banner
+		"BottomStatusPanel": return bottom_status_panel
+		_: return null
+
+func _copy_authored_control(source: Control, target: Control) -> void:
+	if source == null or target == null:
+		return
+	target.position = source.position
+	target.size = source.size
+	target.anchor_left = source.anchor_left
+	target.anchor_top = source.anchor_top
+	target.anchor_right = source.anchor_right
+	target.anchor_bottom = source.anchor_bottom
+	target.offset_left = source.offset_left
+	target.offset_top = source.offset_top
+	target.offset_right = source.offset_right
+	target.offset_bottom = source.offset_bottom
+	target.pivot_offset = source.pivot_offset
+	target.scale = source.scale
+	target.rotation = source.rotation
+	target.modulate = source.modulate
+	target.self_modulate = source.self_modulate
+	target.z_index = source.z_index
+	target.mouse_filter = source.mouse_filter
+	target.clip_contents = source.clip_contents
+	target.visible = source.visible
+	if source is ColorRect and target is ColorRect:
+		(target as ColorRect).color = (source as ColorRect).color
+	if source is TextureRect and target is TextureRect:
+		var source_texture := (source as TextureRect).texture
+		if source_texture != null:
+			(target as TextureRect).texture = source_texture
+		(target as TextureRect).expand_mode = (source as TextureRect).expand_mode
+		(target as TextureRect).stretch_mode = (source as TextureRect).stretch_mode
+	if source is Label and target is Label:
+		(target as Label).text = (source as Label).text
+		(target as Label).horizontal_alignment = (source as Label).horizontal_alignment
+		(target as Label).vertical_alignment = (source as Label).vertical_alignment
+		(target as Label).autowrap_mode = (source as Label).autowrap_mode
+	if source is Button and target is Button:
+		(target as Button).text = (source as Button).text
+		(target as Button).icon = (source as Button).icon
+		(target as Button).expand_icon = (source as Button).expand_icon
+	_copy_authored_theme_overrides(source, target)
+
+func _copy_authored_theme_overrides(source: Control, target: Control) -> void:
+	for color_name in ["font_color", "font_hover_color", "font_pressed_color", "font_disabled_color", "font_outline_color"]:
+		if source.has_theme_color_override(color_name):
+			target.add_theme_color_override(color_name, source.get_theme_color(color_name))
+	for size_name in ["font_size"]:
+		if source.has_theme_font_size_override(size_name):
+			target.add_theme_font_size_override(size_name, source.get_theme_font_size(size_name))
+	for constant_name in ["outline_size"]:
+		if source.has_theme_constant_override(constant_name):
+			target.add_theme_constant_override(constant_name, source.get_theme_constant(constant_name))
+	for style_name in ["normal", "hover", "pressed", "focus", "disabled", "panel", "background", "fill"]:
+		if source.has_theme_stylebox_override(style_name):
+			var style := source.get_theme_stylebox(style_name)
+			if style != null:
+				target.add_theme_stylebox_override(style_name, style.duplicate())
+
+func _copy_authored_extra_children(source_parent: Control, target_parent: Node, position_offset := Vector2.ZERO) -> void:
+	if source_parent == null or target_parent == null:
+		return
+	for source_child in source_parent.get_children():
+		var source_control := source_child as Control
+		if source_control == null:
+			continue
+		if source_parent.name == "FactionStatsAuthoring" and source_control.name in ["PlayerCard", "RedCard", "PurpleCard", "GreenCard"]:
+			continue
+		var target_child := target_parent.get_node_or_null(NodePath(source_control.name)) as Control
+		if target_child == null:
+			target_child = source_control.duplicate() as Control
+			if target_child == null:
+				continue
+			target_parent.add_child(target_child)
+			if position_offset != Vector2.ZERO:
+				target_child.position += position_offset
+		else:
+			_copy_authored_control(source_control, target_child)
+		_copy_authored_extra_children(source_control, target_child)
 
 func _authored_hud_rect(node_name: String, fallback: Rect2) -> Rect2:
 	if authored_hud_layout.has(node_name):
@@ -1866,10 +2169,32 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_SIZE_CHANGED:
 		_layout_ui()
 
-func update_state(time_left: float, player_gold: int, _ai_gold: int, player_hp: float, _ai_hp: float, player_tiles: int, ai_tiles: int, faction_scores: Dictionary = {}, faction_armies: Dictionary = {}) -> void:
+func _configure_summary_count_label(label: Label) -> void:
+	label.add_theme_font_size_override("font_size", 11)
+	label.add_theme_color_override("font_color", Color("#f8fafc"))
+	label.add_theme_color_override("font_outline_color", Color(0.02, 0.04, 0.08, 0.94))
+	label.add_theme_constant_override("outline_size", 3)
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+func update_state(time_left: float, player_gold: int, _ai_gold: int, player_hp: float, _ai_hp: float, player_tiles: int, ai_tiles: int, faction_scores: Dictionary = {}, faction_armies: Dictionary = {}, player_barracks: int = 0) -> void:
 	if stats_label == null:
 		return
-	stats_label.text = "金币  %d" % player_gold
+	stats_label.text = "  %d" % player_gold
+	var eliminated_status: Dictionary = main_ref.get("eliminated_factions") as Dictionary if main_ref != null else {}
+	var player_eliminated := bool(eliminated_status.get(Config.FACTION_PLAYER, false))
+	if player_avatar != null:
+		player_avatar.visible = true
+		player_avatar.call("setup", Config.FACTION_PLAYER)
+		player_avatar.modulate = Color(0.48, 0.48, 0.48, 1.0) if player_eliminated else Color.WHITE
+	if player_name_label != null:
+		player_name_label.text = "Helios"
+	if barracks_count_label != null:
+		barracks_count_label.text = str(player_barracks)
+	if soldier_count_label != null:
+		soldier_count_label.text = str(int(faction_armies.get(Config.FACTION_PLAYER, 0)))
+	if player_eliminated_label != null:
+		player_eliminated_label.visible = player_eliminated
+		player_eliminated_label.text = "已淘汰" if player_eliminated else ""
 	if merchant_shop_overlay != null and merchant_shop_overlay.visible:
 		_update_merchant_gold(player_gold)
 		_update_merchant_price_colors(player_gold)
@@ -1900,13 +2225,19 @@ func update_state(time_left: float, player_gold: int, _ai_gold: int, player_hp: 
 		if display_armies.is_empty():
 			for faction in Config.FACTION_IDS:
 				display_armies[faction] = 0
-		faction_stats_display.set_faction_data(Config.FACTION_IDS, display_scores, display_armies)
+		faction_stats_display.set_faction_data(Config.FACTION_IDS, display_scores, display_armies, eliminated_status)
+	# The player's HQ health remains part of gameplay state, but its HUD bar is
+	# intentionally hidden. Damage and defeat logic continue to use player_hp.
 	hq_health_bar.value = clampf(player_hp, 0.0, Config.HQ_MAX_HP)
-	hq_health_bar.visible = player_hp < Config.HQ_MAX_HP - 0.01
+	hq_health_bar.visible = false
 	var total_seconds := maxi(0, int(ceil(time_left)))
 	var minutes := total_seconds / 60
 	var seconds := total_seconds % 60
 	timer_label.text = "%02d:%02d" % [minutes, seconds]
+
+func reset_faction_stats_animation() -> void:
+	if faction_stats_display != null and faction_stats_display.has_method("reset_ranking_animation"):
+		faction_stats_display.call("reset_ranking_animation")
 
 func _refresh_fps_label() -> void:
 	if fps_label == null:
@@ -1921,13 +2252,48 @@ func _refresh_fps_label() -> void:
 	fps_label.add_theme_color_override("font_color", fps_color)
 
 func show_hint(message: String) -> void:
-	if hint_container == null or message.is_empty():
+	if message.is_empty():
+		return
+	if _is_card_related_hint(message):
+		_show_card_hint_toast(message)
+		return
+	if hint_container == null:
 		return
 	if hint_messages.is_empty() or hint_messages[0] != message:
 		hint_messages.push_front(message)
 		if hint_messages.size() > PERSONAL_HINT_MAX_LINES:
 			hint_messages.pop_back()
 		_render_hint_history()
+
+func _show_card_hint_toast(message: String) -> void:
+	if card_hint_panel == null or card_hint_label == null:
+		return
+	if card_hint_tween != null and card_hint_tween.is_valid():
+		card_hint_tween.kill()
+	card_hint_label.text = message
+	card_hint_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	var padding := ui_config.card_hint_padding if ui_config != null else Vector2(20.0, 10.0)
+	var max_width := maxf(120.0, viewport_size.x - 48.0)
+	var desired := card_hint_label.get_combined_minimum_size()
+	var content_width := minf(maxf(1.0, desired.x), max_width - padding.x * 2.0)
+	if desired.x > max_width - padding.x * 2.0:
+		card_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		content_width = max_width - padding.x * 2.0
+	card_hint_label.size = Vector2(content_width, maxf(30.0, card_hint_label.get_combined_minimum_size().y))
+	card_hint_label.position = padding
+	card_hint_panel.size = card_hint_label.size + padding * 2.0
+	card_hint_panel.position = (viewport_size - card_hint_panel.size) * 0.5
+	card_hint_panel.modulate.a = 1.0
+	card_hint_panel.visible = true
+	card_hint_tween = create_tween()
+	var duration := ui_config.card_hint_duration if ui_config != null else 1.0
+	var fade_duration := minf(0.12, maxf(0.02, duration * 0.25))
+	card_hint_tween.tween_interval(maxf(0.02, duration - fade_duration))
+	card_hint_tween.tween_property(card_hint_panel, "modulate:a", 0.0, fade_duration)
+	card_hint_tween.tween_callback(func() -> void:
+		card_hint_panel.visible = false
+		card_hint_panel.modulate.a = 1.0
+	)
 
 func clear_hint_history() -> void:
 	hint_messages.clear()

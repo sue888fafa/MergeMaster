@@ -32,8 +32,10 @@ const BuildingDestroyEffectScript := preload("res://building_destroy_effect.gd")
 const IntelligenceBuildingDropEffectScript := preload("res://intelligence_building_drop_effect.gd")
 const GoldPopupEffectScript := preload("res://gold_popup_effect.gd")
 const QuestionCardEffectScript := preload("res://question_card_effect.gd")
+const ChestOpenEffectScript := preload("res://chest_open_effect.gd")
 const DragonCardEffectScript := preload("res://dragon_card_effect.gd")
 const BlizzardCardEffectScript := preload("res://blizzard_card_effect.gd")
+const AudioManagerScript := preload("res://audio_manager.gd")
 const INVALID_CELL := Vector2i(999, 999)
 
 @onready var board: HexBoard = $HexBoard
@@ -129,6 +131,8 @@ var pending_intelligence_building_drop: Dictionary = {}
 var intelligence_building_drop_queue: Array[Dictionary] = []
 var intelligence_building_drop_tween: Tween
 var pending_divinations: Dictionary = {}
+var pending_divination_reveal_effects: Dictionary = {}
+var pending_chest_rewards: Dictionary = {}
 var divination_tween: Tween
 var divination_camera_active: Dictionary = {}
 var rng := RandomNumberGenerator.new()
@@ -160,6 +164,8 @@ var event_presentation_lock_until := 0.0
 var pending_reveals: Dictionary = {}
 var fate_reveal_batches: Dictionary = {}
 var fate_bomb_building_targets: Dictionary = {}
+var bomb_event_states: Dictionary = {}
+var active_fate_effects: Dictionary = {}
 var bombardment_started := false
 var bombardment_round := 0
 var bombardment_next_time := 0.0
@@ -182,12 +188,14 @@ var last_hud_time := -1
 var last_hud_player_gold := -1
 var last_hud_ai_gold := -1
 var last_hud_player_tiles := -1
+var last_hud_player_barracks := -1
 var last_hud_ai_tiles := -1
 var last_hud_player_hp := -1.0
 var last_hud_ai_hp := -1.0
 var last_hud_message := ""
 var last_hud_faction_scores := ""
 var last_hud_faction_armies := ""
+var last_hud_eliminated := ""
 
 func _ready() -> void:
 	RenderingServer.set_default_clear_color(Art.SKY_LIGHT)
@@ -229,6 +237,33 @@ func _ready() -> void:
 	board.focus_camera_on_cell(player_hq)
 	_refresh_purchase_cells()
 	_update_hud()
+
+func _play_tile_reveal_sound(owner: int, sound_type: int = AudioManagerScript.RevealSound.STANDARD) -> void:
+	if owner != PLAYER:
+		return
+	var audio_manager := get_node_or_null("AudioManager")
+	if audio_manager != null and audio_manager.has_method("play_tile_reveal"):
+		audio_manager.play_tile_reveal(sound_type)
+
+func _get_tile_reveal_sound_type(tile: Dictionary, result: Dictionary) -> int:
+	if bool(result.get("monster", false)):
+		return AudioManagerScript.RevealSound.MONSTER_ROAR
+	var tile_type := int(tile.get("tile_type", Config.BARRACKS_TILE_TYPE))
+	if tile_type == Config.QUESTION_TILE_TYPE:
+		match int(result.get("random_event", -1)):
+			Config.RANDOM_EVENT_BOMB:
+				return AudioManagerScript.RevealSound.SILENT
+			Config.RANDOM_EVENT_PLANE:
+				return AudioManagerScript.RevealSound.PAPER_PLANE
+		if int(result.get("building", EMPTY)) == MERCHANT:
+			return AudioManagerScript.RevealSound.MERCHANT_BELL
+	if tile_type == Config.VISIBLE_TILE_TYPE:
+		match int(tile.get("visible_tile_result", -1)):
+			Config.VISIBLE_MINE:
+				return AudioManagerScript.RevealSound.MINE_CART
+			Config.VISIBLE_FATE:
+				return AudioManagerScript.RevealSound.WIND
+	return AudioManagerScript.RevealSound.STANDARD
 
 func get_faction_ids() -> Array[int]:
 	return FACTIONS
@@ -580,6 +615,14 @@ func _on_building_changed(cell: Vector2i, building: int) -> void:
 	else:
 		active_tower_cells.erase(cell)
 
+func _count_active_barracks(owner: int) -> int:
+	var count := 0
+	for raw_cell in active_barracks_cells:
+		var cell: Vector2i = raw_cell
+		if board.has_cell(cell) and int(board.tiles[cell].get("owner", EMPTY)) == owner:
+			count += 1
+	return count
+
 func _on_building_destroy_effect_requested(cell: Vector2i, building: int, level: int) -> void:
 	if not board.has_cell(cell) or not is_instance_valid(upgrade_effects):
 		return
@@ -747,6 +790,7 @@ func _process_hq_dispatch() -> void:
 
 func restart_game() -> void:
 	_reset_hq_states()
+	hud.reset_faction_stats_animation()
 	hud.clear_card_events()
 	hud.clear_divination_events()
 	hud.clear_equipment_state()
@@ -812,6 +856,9 @@ func restart_game() -> void:
 	pending_intelligence_building_drop.clear()
 	intelligence_building_drop_queue.clear()
 	pending_divinations.clear()
+	pending_divination_reveal_effects.clear()
+	pending_chest_rewards.clear()
+	bomb_event_states.clear()
 	divination_camera_active.clear()
 	board.clear_card_land_loss_cell()
 	board.intelligence_building_drop_animations.clear()
@@ -825,6 +872,8 @@ func restart_game() -> void:
 	pending_reveals.clear()
 	fate_reveal_batches.clear()
 	fate_bomb_building_targets.clear()
+	bomb_event_states.clear()
+	active_fate_effects.clear()
 	bombardment_started = false
 	bombardment_round = 0
 	bombardment_next_time = 0.0
@@ -865,12 +914,14 @@ func restart_game() -> void:
 	last_hud_player_gold = -1
 	last_hud_ai_gold = -1
 	last_hud_player_tiles = -1
+	last_hud_player_barracks = -1
 	last_hud_ai_tiles = -1
 	last_hud_player_hp = -1.0
 	last_hud_ai_hp = -1.0
 	last_hud_message = ""
 	last_hud_faction_scores = ""
 	last_hud_faction_armies = ""
+	last_hud_eliminated = ""
 	board.reset()
 	_rebuild_active_building_indexes()
 	_rebuild_territory_counts()
@@ -1152,6 +1203,7 @@ func reveal_tile(owner: int, cell: Vector2i) -> bool:
 		"fate_tile": fate_tile,
 		"committed": false
 	}
+	_play_tile_reveal_sound(owner, _get_tile_reveal_sound_type(tile, result))
 	if owner == PLAYER:
 		last_message = "我方正在翻开地块，消耗 %d 金币。" % cost
 	_refresh_purchase_cells()
@@ -1183,6 +1235,7 @@ func _reveal_free_tile(owner: int, cell: Vector2i, allow_fate := false, fate_ori
 		"fate_tile": fate_tile,
 		"committed": false
 	}
+	_play_tile_reveal_sound(owner, _get_tile_reveal_sound_type(tile, result))
 	_refresh_purchase_cells()
 	return true
 
@@ -1299,13 +1352,37 @@ func _trigger_chest_event(owner: int, cell: Vector2i) -> void:
 	if not is_valid_faction(owner) or not board.has_cell(cell):
 		_finish_fate_event(cell)
 		return
-	gold[owner] += Config.QUESTION_CHEST_REWARD_AMOUNT
+	if pending_chest_rewards.has(cell):
+		return
+	var reward := int(Config.QUESTION_CHEST_REWARD_AMOUNT)
+	pending_chest_rewards[cell] = {"owner": owner, "reward": reward}
 	if owner == PLAYER:
-		last_message = "随机事件：打开宝箱，获得 %d 个金币。" % int(Config.QUESTION_CHEST_REWARD_AMOUNT)
-		_show_player_officer_bubble("发财了！我们找到了一个宝箱，获得了%d枚金币！" % int(Config.QUESTION_CHEST_REWARD_AMOUNT))
-		_update_hud()
+		_begin_event_presentation_lock()
+	var effect: Node2D = ChestOpenEffectScript.new()
+	_ensure_dynamic_layer(fate_effects, "FateEffects").add_child(effect)
+	effect.setup(board.get_cell_surface_anchor(cell), reward)
+	_play_gold_popup_at_cell(cell, reward)
+	effect.finished.connect(_on_chest_open_effect_finished.bind(cell))
+
+func _on_chest_open_effect_finished(cell: Vector2i) -> void:
+	if not pending_chest_rewards.has(cell):
+		return
+	var pending: Dictionary = pending_chest_rewards[cell]
+	pending_chest_rewards.erase(cell)
+	var owner := int(pending.get("owner", AI))
+	var reward := int(pending.get("reward", Config.QUESTION_CHEST_REWARD_AMOUNT))
+	if not is_valid_faction(owner) or not board.has_cell(cell):
+		if owner == PLAYER:
+			_end_event_presentation_lock()
+		return
+	gold[owner] += reward
+	if owner == PLAYER:
+		last_message = "随机事件：打开宝箱，获得 %d 个金币。" % reward
+		_show_player_officer_bubble("发财了！我们找到了一个宝箱，获得了%d枚金币！" % reward)
+		_end_event_presentation_lock()
 	_finish_fate_event(cell)
 	_refresh_purchase_cells()
+	_update_hud()
 	board.queue_redraw()
 
 func _trigger_divination_event(owner: int, fate_cell: Vector2i) -> void:
@@ -1323,16 +1400,16 @@ func _trigger_divination_event(owner: int, fate_cell: Vector2i) -> void:
 		"fate_cell": fate_cell,
 		"return_position": return_position
 	}
-	pending_divinations[fate_cell] = pending
-	if owner == PLAYER and hud != null and hud.has_method("play_divination_event"):
+	if owner == PLAYER:
 		_begin_event_presentation_lock()
 		pending["target_name"] = _faction_display_name(target)
 		pending["target_type_name"] = _divination_target_name(target_type)
 		pending["event_name"] = _divination_event_name(event_type)
-		hud.play_divination_event(pending)
-		return
-	var result := _resolve_divination_event(owner, target, event_type)
-	_present_divination_result(pending, result, false)
+	pending_divinations[fate_cell] = pending
+	# The house is visible now. Reuse its purple completion effect as the
+	# reveal presentation before opening the divination HUD or resolving AI.
+	pending_divination_reveal_effects[fate_cell] = true
+	board.start_divination_completion_effect(fate_cell)
 
 func _roll_divination_target(_diviner: int) -> int:
 	return rng.randi_range(Config.FATE_DIVINATION_TARGET_MOST_TILES, Config.FATE_DIVINATION_TARGET_DIVINER)
@@ -1633,9 +1710,14 @@ func _divination_result_message(diviner: int, target: int, event_type: int, resu
 
 func _play_gold_popup(owner: int, amount: int) -> void:
 	var hq_cell: Vector2i = get_hq_cell(owner)
+	_play_gold_popup_at_cell(hq_cell, amount)
+
+func _play_gold_popup_at_cell(cell: Vector2i, amount: int) -> void:
+	if not board.has_cell(cell):
+		return
 	var effect: Node2D = GoldPopupEffectScript.new()
 	_ensure_dynamic_layer(fate_effects, "FateEffects").add_child(effect)
-	effect.setup(board.get_cell_surface_anchor(hq_cell), amount)
+	effect.setup(board.get_cell_surface_anchor(cell), amount)
 
 func _play_dragon_card_effect(cell: Vector2i) -> void:
 	if not board.has_cell(cell):
@@ -2179,6 +2261,9 @@ func _apply_barracks_level_to_units(cell: Vector2i, level: int) -> void:
 			unit.apply_barracks_level(level)
 
 func _trigger_bomb_event(owner: int, fate_cell: Vector2i) -> void:
+	if bomb_event_states.has(fate_cell):
+		return
+	_play_tile_reveal_sound(owner, AudioManagerScript.RevealSound.EXPLOSION)
 	if owner == PLAYER:
 		_show_player_officer_bubble("BOOM！")
 	var reveal_targets: Array[Vector2i] = []
@@ -2196,6 +2281,7 @@ func _trigger_bomb_event(owner: int, fate_cell: Vector2i) -> void:
 	if owner == PLAYER:
 		last_message = "随机事件：命运地块触发炸弹，周围地块和敌方建筑即将受到影响。"
 	fate_bomb_building_targets[fate_cell] = building_targets
+	bomb_event_states[fate_cell] = "playing"
 	_start_fate_effect(Config.RANDOM_EVENT_BOMB, owner, fate_cell, fate_cell, reveal_targets)
 
 func _trigger_plane_event(owner: int, fate_cell: Vector2i) -> void:
@@ -2260,6 +2346,9 @@ func _find_plane_target(fate_cell: Vector2i) -> Vector2i:
 	return nearest[rng.randi_range(0, nearest.size() - 1)]
 
 func _start_fate_effect(event_type: int, owner: int, origin: Vector2i, target: Vector2i, locked_cells: Array[Vector2i]) -> void:
+	if active_fate_effects.has(origin):
+		return
+	active_fate_effects[origin] = true
 	for cell in locked_cells:
 		fate_locked_cells[cell] = origin
 	var effect: Node2D
@@ -2268,13 +2357,18 @@ func _start_fate_effect(event_type: int, owner: int, origin: Vector2i, target: V
 	else:
 		effect = FateEventScript.new()
 	_ensure_dynamic_layer(fate_effects, "FateEffects").add_child(effect)
+	effect.finished.connect(_on_fate_effect_finished.bind(effect, event_type, owner, origin, target, locked_cells))
 	if event_type == Config.RANDOM_EVENT_BOMB:
 		effect.setup(board.get_cell_world_center(origin), locked_cells)
 	else:
 		effect.setup(event_type, board.get_cell_world_center(origin), board.get_cell_world_center(target))
-	effect.finished.connect(_on_fate_effect_finished.bind(effect, event_type, owner, origin, target, locked_cells))
 
 func _on_fate_effect_finished(effect: Node2D, event_type: int, owner: int, origin: Vector2i, target: Vector2i, locked_cells: Array[Vector2i]) -> void:
+	if event_type == Config.RANDOM_EVENT_BOMB:
+		if str(bomb_event_states.get(origin, "")) != "playing":
+			return
+		bomb_event_states[origin] = "revealing"
+	active_fate_effects.erase(origin)
 	var pending_cells: Array[Vector2i] = []
 	match event_type:
 		Config.RANDOM_EVENT_BOMB:
@@ -2299,6 +2393,8 @@ func _on_fate_effect_finished(effect: Node2D, event_type: int, owner: int, origi
 			return
 	if pending_cells.is_empty():
 		_release_fate_locks(origin, locked_cells)
+		if event_type == Config.RANDOM_EVENT_BOMB:
+			bomb_event_states.erase(origin)
 		_finish_fate_event(origin)
 	else:
 		fate_reveal_batches[origin] = {
@@ -2350,6 +2446,8 @@ func _resolve_fate_reveal(origin: Vector2i, cell: Vector2i) -> void:
 		return
 	_release_fate_locks(origin, batch["locked_cells"])
 	fate_reveal_batches.erase(origin)
+	if bomb_event_states.has(origin):
+		bomb_event_states.erase(origin)
 	_finish_fate_event(origin)
 
 func _release_fate_locks(origin: Vector2i, cells: Array[Vector2i]) -> void:
@@ -2368,6 +2466,18 @@ func _finish_fate_event(fate_cell: Vector2i, play_divination_effect := false) ->
 	board.queue_redraw()
 
 func _on_divination_effect_finished(fate_cell: Vector2i) -> void:
+	if pending_divination_reveal_effects.has(fate_cell):
+		pending_divination_reveal_effects.erase(fate_cell)
+		if pending_divinations.has(fate_cell):
+			var pending: Dictionary = pending_divinations[fate_cell]
+			pending["awaiting_reveal_effect"] = false
+			pending_divinations[fate_cell] = pending
+			if int(pending.get("owner", AI)) == PLAYER and hud != null and hud.has_method("play_divination_event"):
+				hud.play_divination_event(pending)
+			else:
+				var result := _resolve_divination_event(int(pending.get("owner", AI)), int(pending.get("target", AI)), int(pending.get("event_type", Config.FATE_DIVINATION_GAIN_CARD)))
+				_present_divination_result(pending, result, false)
+		return
 	_finish_fate_event(fate_cell)
 	_refresh_purchase_cells()
 
@@ -3102,8 +3212,6 @@ func process_unit(unit: BattleUnit, delta: float) -> void:
 		return
 	unit.combat_target_refresh_timer -= delta
 	unit.monster_interrupt_timer -= delta
-	var dispatch_range := get_unit_target_search_range(unit)
-	var detection_cell := get_unit_detection_cell(unit)
 	var target: Dictionary = _locked_monster_target(unit)
 	if target.is_empty():
 		target = unit.combat_target
@@ -3123,6 +3231,9 @@ func process_unit(unit: BattleUnit, delta: float) -> void:
 		# This prevents a soldier from switching between enemy units/buildings
 		# merely because a closer candidate enters the search area.
 		if not locked_pvp_target and unit.combat_target_refresh_timer <= 0.0:
+			# Board lookup work is only needed on target refresh frames.
+			var dispatch_range := get_unit_target_search_range(unit)
+			var detection_cell := get_unit_detection_cell(unit)
 			target = _nearest_combat_target(detection_cell, unit.faction, dispatch_range)
 			unit.combat_target = target
 			unit.combat_target_refresh_timer = Config.UNIT_TARGET_REFRESH_INTERVAL
@@ -3142,6 +3253,8 @@ func process_unit(unit: BattleUnit, delta: float) -> void:
 		# currently locked wild monster. The check is anchored to the barracks
 		# dispatch area, never to the whole board.
 		if unit.monster_interrupt_timer <= 0.0:
+			var dispatch_range := get_unit_target_search_range(unit)
+			var detection_cell := get_unit_detection_cell(unit)
 			var higher_priority_target := _nearest_combat_target(detection_cell, unit.faction, dispatch_range)
 			unit.monster_interrupt_timer = 0.10
 			if not higher_priority_target.is_empty() and _combat_target_group(higher_priority_target, unit.faction) < _combat_target_group(target, unit.faction):
@@ -3195,8 +3308,8 @@ func process_unit(unit: BattleUnit, delta: float) -> void:
 							_fire_bullet(unit, enemy)
 						else:
 							_play_melee_attack_effect(unit.position, enemy.position)
-							enemy.take_damage(unit.attack)
-						unit.mark_attack()
+							enemy.take_damage(unit.attack, unit)
+						unit.mark_attack(enemy.position)
 					return
 				unit.move_directly_to(enemy.position, delta)
 			"building":
@@ -3209,7 +3322,7 @@ func process_unit(unit: BattleUnit, delta: float) -> void:
 						else:
 							_play_melee_attack_effect(unit.position, board.axial_to_world(building_cell))
 							damage_building(building_cell, unit.attack, unit.faction)
-						unit.mark_attack()
+						unit.mark_attack(board.axial_to_world(building_cell))
 					return
 				unit.move_directly_to(board.axial_to_world(building_cell), delta)
 			"monster":
@@ -3226,7 +3339,7 @@ func process_unit(unit: BattleUnit, delta: float) -> void:
 						else:
 							_play_melee_attack_effect(unit.position, monster.position)
 							monster.take_damage(unit.attack, unit)
-						unit.mark_attack()
+						unit.mark_attack(monster.position)
 					return
 				unit.move_directly_to(monster.position, delta)
 			"hq":
@@ -3242,7 +3355,7 @@ func process_unit(unit: BattleUnit, delta: float) -> void:
 						if not unit.is_ranged:
 							_play_melee_attack_effect(unit.position, board.axial_to_world(enemy_hq))
 						base_hp[enemy_owner] -= unit.attack
-						unit.mark_attack()
+						unit.mark_attack(board.axial_to_world(enemy_hq))
 						_check_hq_result(unit.faction)
 					return
 				unit.move_directly_to(board.axial_to_world(enemy_hq), delta)
@@ -4106,6 +4219,9 @@ func _end_game(_message: String) -> void:
 	pending_intelligence_building_drop.clear()
 	intelligence_building_drop_queue.clear()
 	pending_divinations.clear()
+	pending_divination_reveal_effects.clear()
+	pending_chest_rewards.clear()
+	bomb_event_states.clear()
 	divination_camera_active.clear()
 	board.clear_card_land_loss_cell()
 	board.intelligence_building_drop_animations.clear()
@@ -4115,6 +4231,7 @@ func _end_game(_message: String) -> void:
 	hud.hide_world_broadcast()
 	board.clear_bombardment_cells()
 	board.clear_bombardment_warning_cells()
+	_clear_effect_children(fate_effects)
 	_clear_effect_children(bombardment_effects)
 	_clear_effect_children(upgrade_effects)
 	_clear_effect_children(intelligence_effects)
@@ -4168,6 +4285,7 @@ func _update_hud() -> void:
 	var player_gold_value := int(gold[PLAYER])
 	var ai_gold_value := int(gold[AI])
 	var player_tiles := int(owned_tile_counts.get(PLAYER, 0))
+	var player_barracks := _count_active_barracks(PLAYER)
 	var ai_tiles := int(owned_tile_counts.get(AI, 0))
 	var faction_scores: Dictionary = {}
 	var score_parts: Array[String] = []
@@ -4181,19 +4299,25 @@ func _update_hud() -> void:
 		faction_armies[faction] = int(active_unit_counts.get(faction, 0))
 		army_parts.append("%d:%d" % [faction, int(faction_armies[faction])])
 	var faction_army_key := ",".join(army_parts)
-	if time_left == last_hud_time and player_gold_value == last_hud_player_gold and ai_gold_value == last_hud_ai_gold and player_tiles == last_hud_player_tiles and ai_tiles == last_hud_ai_tiles and faction_score_key == last_hud_faction_scores and faction_army_key == last_hud_faction_armies and is_equal_approx(base_hp[PLAYER], last_hud_player_hp) and is_equal_approx(base_hp[AI], last_hud_ai_hp) and last_message == last_hud_message:
+	var eliminated_parts: Array[String] = []
+	for faction in FACTIONS:
+		eliminated_parts.append("%d:%s" % [faction, str(bool(eliminated_factions.get(faction, false)))])
+	var eliminated_key := ",".join(eliminated_parts)
+	if time_left == last_hud_time and player_gold_value == last_hud_player_gold and ai_gold_value == last_hud_ai_gold and player_tiles == last_hud_player_tiles and player_barracks == last_hud_player_barracks and ai_tiles == last_hud_ai_tiles and faction_score_key == last_hud_faction_scores and faction_army_key == last_hud_faction_armies and eliminated_key == last_hud_eliminated and is_equal_approx(base_hp[PLAYER], last_hud_player_hp) and is_equal_approx(base_hp[AI], last_hud_ai_hp) and last_message == last_hud_message:
 		return
 	board.set_player_gold(gold[PLAYER])
-	hud.update_state(max(0.0, match_duration - elapsed), player_gold_value, ai_gold_value, base_hp[PLAYER], base_hp[AI], player_tiles, ai_tiles, faction_scores, faction_armies)
+	hud.update_state(max(0.0, match_duration - elapsed), player_gold_value, ai_gold_value, base_hp[PLAYER], base_hp[AI], player_tiles, ai_tiles, faction_scores, faction_armies, player_barracks)
 	if last_message != last_hud_message:
 		hud.show_hint(last_message)
 	last_hud_time = time_left
 	last_hud_player_gold = player_gold_value
 	last_hud_ai_gold = ai_gold_value
 	last_hud_player_tiles = player_tiles
+	last_hud_player_barracks = player_barracks
 	last_hud_ai_tiles = ai_tiles
 	last_hud_player_hp = base_hp[PLAYER]
 	last_hud_ai_hp = base_hp[AI]
 	last_hud_message = last_message
 	last_hud_faction_scores = faction_score_key
 	last_hud_faction_armies = faction_army_key
+	last_hud_eliminated = eliminated_key

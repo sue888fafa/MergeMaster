@@ -40,12 +40,30 @@ extends Resource
 @export var status_label_rect := Rect2(-430.0, 14.0, 414.0, 34.0)
 @export var army_label_rect := Rect2(-430.0, 45.0, 414.0, 26.0)
 @export var faction_stats_position := Vector2(-16.0, 4.0)
-@export var faction_stats_minimum_size := Vector2(230.0, 78.0)
-@export var faction_stats_size := Vector2(234.0, 78.0)
+@export var faction_stats_minimum_size := Vector2(300.0, 100.0)
+@export var faction_stats_size := Vector2(424.0, 100.0)
+@export var faction_stats_card_size := Vector2(104.0, 92.0)
+@export var faction_stats_card_spacing := 4.0
+@export var faction_stats_avatar_size := 44.0
+@export var faction_stats_first_avatar_scale := 1.5
+@export var faction_stats_avatar_offset := Vector2(-22.0, -3.0)
+@export var faction_stats_rank_icon_size := Vector2(34.0, 34.0)
+@export var faction_stats_rank_icon_offset := Vector2(-25.0, -29.0)
+@export var faction_stats_name_rect := Rect2(8.0, -7.0, 80.0, 20.0)
+@export var faction_stats_name_font_size := 12
+@export var faction_stats_tile_rect := Rect2(2.0, 7.0, 45.0, 34.0)
+@export var faction_stats_tile_count_offset := Vector2(9.0, 24.0)
+@export var faction_stats_tile_count_font_size := 16
 @export var bottom_status_rect := Rect2(16.0, -78.0, 310.0, 62.0)
 @export var broadcast_rect := Rect2(0.0, 110.0, 560.0, 46.0)
 @export var watch_button_rect := Rect2(12.0, -58.0, 148.0, 42.0)
 @export var hint_rect := Rect2(20.0, -220.0, 420.0, 84.0)
+@export var use_authored_hud_layout := true
+@export var allow_runtime_fallback_nodes := true
+@export var card_hint_duration := 1.0
+@export var card_hint_background_color := Color(0.02, 0.04, 0.08, 0.68)
+@export var card_hint_padding := Vector2(20.0, 10.0)
+@export var card_hint_font_size := 18
 
 @export_category("战斗界面样式")
 @export var battle_gold_icon_texture: Texture2D = preload("res://assets/generated/ui/coin.png")
@@ -73,6 +91,8 @@ extends Resource
 @export var faction_stats_column_spacing := 48.0
 @export var faction_stats_icon_radius := 15.0
 @export var faction_stats_soldier_scale := 1.0
+@export var faction_stats_animation_duration := 0.35
+@export var faction_stats_first_card_scale := 1.2
 
 @export_category("弹窗位置与大小")
 @export var player_info_panel_size := Vector2(600.0, 760.0)

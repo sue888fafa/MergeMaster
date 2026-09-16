@@ -4,23 +4,38 @@
 [ext_resource type="Texture2D" uid="uid://w8wx8aelth52" path="res://assets/generated/ui/coin.png" id="2_2so8l"]
 [ext_resource type="Script" uid="uid://dtejyqm62x45l" path="res://faction_stats_display.gd" id="3_stats"]
 [ext_resource type="Texture2D" uid="uid://o3nogg3enmkl" path="res://assets/generated/ui/castle_info.png" id="4_castle"]
+[ext_resource type="Texture2D" uid="uid://bx80quwvs7eyk" path="res://assets/generated/settlement/avatar_blue.png" id="5_avatar_blue"]
+[ext_resource type="Texture2D" uid="uid://co10nhdb5p3w2" path="res://assets/generated/settlement/avatar_red.png" id="6_avatar_red"]
+[ext_resource type="Texture2D" uid="uid://dgyhwli5f48m6" path="res://assets/generated/settlement/avatar_purple.png" id="7_avatar_purple"]
+[ext_resource type="Texture2D" uid="uid://cixhlclgjmsft" path="res://assets/generated/settlement/avatar_green.png" id="8_avatar_green"]
+[ext_resource type="Texture2D" uid="uid://bydocvsl0l08h" path="res://assets/generated/ui/rank_icons/rank_1.png" id="9_rank_1"]
+[ext_resource type="Texture2D" uid="uid://ch7lgiumfae8e" path="res://assets/generated/ui/rank_icons/rank_2.png" id="10_rank_2"]
+[ext_resource type="Texture2D" uid="uid://co2d1h0yakckw" path="res://assets/generated/ui/rank_icons/rank_3.png" id="11_rank_3"]
+[ext_resource type="Texture2D" uid="uid://cylgkeywiwr7i" path="res://assets/generated/ui/rank_icons/rank_4.png" id="12_rank_4"]
+[ext_resource type="Texture2D" uid="uid://cy804k2llvhk5" path="res://assets/generated/tiles/tile_blue.png" id="13_tile_blue"]
+[ext_resource type="Texture2D" uid="uid://crkuykagrcyan" path="res://assets/generated/tiles/tile_red.png" id="14_tile_red"]
+[ext_resource type="Texture2D" uid="uid://fm4ituo6r1h" path="res://assets/generated/tiles/tile_purple.png" id="15_tile_purple"]
+[ext_resource type="Texture2D" uid="uid://38mrekjorsrw" path="res://assets/generated/tiles/tile_green.png" id="16_tile_green"]
+[ext_resource type="Script" uid="uid://d0d28j5nuh77g" path="res://faction_avatar.gd" id="17_faction_avatar"]
+[ext_resource type="Texture2D" uid="uid://lb6s5k2sjqvv" path="res://assets/generated/ui/player_avatar_frame.png" id="18_avatar_frame"]
+[ext_resource type="Texture2D" uid="uid://c38c2rma3jf6g" path="res://assets/generated/ui/barracks_icon.png" id="19_barracks_icon"]
+[ext_resource type="Texture2D" uid="uid://dt1bi5t2eddm8" path="res://assets/generated/ui/soldier_icon.png" id="20_soldier_icon"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_klsug"]
 content_margin_left = 12.0
 content_margin_top = 7.0
 content_margin_right = 12.0
 content_margin_bottom = 7.0
-bg_color = Color(0.3764706, 0.64705884, 0.98039216, 1)
+bg_color = Color(0.34181017, 0.6975686, 0.7599555, 1)
 border_width_left = 1
 border_width_top = 1
 border_width_right = 1
-border_width_bottom = 3
+border_width_bottom = 1
 border_color = Color(0.2, 0.25490198, 0.33333334, 1)
 corner_radius_top_left = 4
 corner_radius_top_right = 4
 corner_radius_bottom_right = 4
 corner_radius_bottom_left = 4
-shadow_size = 1
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_o3a6p"]
 content_margin_left = 12.0
@@ -86,37 +101,6 @@ corner_radius_top_right = 4
 corner_radius_bottom_right = 4
 corner_radius_bottom_left = 4
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_qjmj8"]
-bg_color = Color(0, 0, 0, 0.45882353)
-corner_radius_top_left = 5
-corner_radius_top_right = 5
-corner_radius_bottom_right = 5
-corner_radius_bottom_left = 5
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_pgth8"]
-bg_color = Color(0.9372549, 0.26666668, 0.26666668, 1)
-border_color = Color(0.94722956, 0.74732316, 0.6957729, 1)
-corner_radius_top_left = 2
-corner_radius_top_right = 2
-corner_radius_bottom_right = 2
-corner_radius_bottom_left = 2
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_huevy"]
-content_margin_left = 18.0
-content_margin_top = 18.0
-content_margin_right = 18.0
-content_margin_bottom = 18.0
-bg_color = Color(0.09019608, 0.1254902, 0.2, 1)
-border_width_left = 1
-border_width_top = 1
-border_width_right = 1
-border_width_bottom = 1
-border_color = Color(0.2, 0.25490198, 0.33333334, 1)
-corner_radius_top_left = 6
-corner_radius_top_right = 6
-corner_radius_bottom_right = 6
-corner_radius_bottom_left = 6
-
 [node name="BattleHUDPreview" type="Control" unique_id=55938226]
 custom_minimum_size = Vector2(720, 1280)
 layout_mode = 3
@@ -139,10 +123,10 @@ color = Color(0.76862746, 0.9254902, 1, 1)
 [node name="GoldIcon" type="TextureRect" parent="." unique_id=1233357742]
 z_index = 1
 layout_mode = 0
-offset_left = 16.0
-offset_top = 14.0
-offset_right = 44.0
-offset_bottom = 42.0
+offset_left = 30.0
+offset_top = 1212.0
+offset_right = 73.0
+offset_bottom = 1255.0
 mouse_filter = 2
 texture = ExtResource("2_2so8l")
 expand_mode = 1
@@ -151,22 +135,22 @@ stretch_mode = 5
 [node name="GoldLabel" type="Label" parent="." unique_id=1336117473]
 z_index = 1
 layout_mode = 0
-offset_left = 50.0
-offset_top = 16.0
-offset_right = 168.0
-offset_bottom = 50.0
+offset_left = 76.0
+offset_top = 1218.0
+offset_right = 194.0
+offset_bottom = 1252.0
 theme_override_colors/font_color = Color(0.972549, 0.98039216, 0.9882353, 1)
 theme_override_colors/font_outline_color = Color(0.02, 0.04, 0.08, 0.92)
 theme_override_constants/outline_size = 4
-theme_override_font_sizes/font_size = 18
-text = "  12"
+theme_override_font_sizes/font_size = 22
+text = "金币  12"
 
 [node name="FpsLabel" type="Label" parent="." unique_id=1246852503]
 layout_mode = 0
-offset_left = 653.0
-offset_top = 73.0
-offset_right = 753.0
-offset_bottom = 97.0
+offset_left = 648.0
+offset_top = 99.0
+offset_right = 748.0
+offset_bottom = 123.0
 theme_override_colors/font_color = Color(0.2901961, 0.87058824, 0.5019608, 1)
 theme_override_colors/font_outline_color = Color(0.02, 0.04, 0.08, 0.92)
 theme_override_constants/outline_size = 4
@@ -175,12 +159,11 @@ text = "FPS 60"
 
 [node name="PlayerInfoButton" type="Button" parent="." unique_id=2095614956]
 layout_mode = 0
-offset_left = 16.0
-offset_top = 78.0
-offset_right = 64.0
-offset_bottom = 126.0
+offset_left = 25.0
+offset_top = 151.0
+offset_right = 73.0
+offset_bottom = 199.0
 tooltip_text = "城堡信息"
-mouse_filter = 2
 theme_override_colors/font_color = Color(0.972549, 0.98039216, 0.9882353, 1)
 theme_override_colors/font_pressed_color = Color(0.972549, 0.98039216, 0.9882353, 1)
 theme_override_colors/font_hover_color = Color(0.972549, 0.98039216, 0.9882353, 1)
@@ -192,127 +175,439 @@ theme_override_styles/pressed = SubResource("StyleBoxFlat_o3a6p")
 theme_override_styles/hover = SubResource("StyleBoxFlat_46m16")
 theme_override_styles/disabled = SubResource("StyleBoxFlat_8g80f")
 theme_override_styles/focus = SubResource("StyleBoxFlat_et2hf")
-text = "
-"
 icon = ExtResource("4_castle")
 expand_icon = true
 
-[node name="HQHealthBar" type="ProgressBar" parent="." unique_id=264372234]
-layout_mode = 0
-offset_left = 149.0
-offset_top = 23.0
-offset_right = 196.0
-offset_bottom = 33.0
-mouse_filter = 2
-theme_override_styles/background = SubResource("StyleBoxFlat_qjmj8")
-theme_override_styles/fill = SubResource("StyleBoxFlat_pgth8")
-value = 100.0
-show_percentage = false
-
 [node name="TimerLabel" type="Label" parent="." unique_id=1687079085]
 layout_mode = 0
-offset_left = 180.0
-offset_top = 63.0
-offset_right = 540.0
-offset_bottom = 105.0
+offset_left = 166.0
+offset_top = 103.0
+offset_right = 526.0
+offset_bottom = 145.0
 theme_override_colors/font_color = Color(1, 1, 1, 1)
 theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
 theme_override_constants/outline_size = 4
-theme_override_font_sizes/font_size = 22
+theme_override_font_sizes/font_size = 30
 text = "08:42"
 horizontal_alignment = 1
 vertical_alignment = 1
 
-[node name="FactionStatsDisplay" type="Control" parent="." unique_id=290382848]
+[node name="PlayerAvatar" type="Control" parent="." unique_id=1687079086]
 anchors_preset = 0
-offset_left = 496.0
+offset_left = 13.0
+offset_top = 19.0
+offset_right = 113.0
+offset_bottom = 119.0
+mouse_filter = 2
+script = ExtResource("17_faction_avatar")
+
+[node name="AvatarFrame" type="TextureRect" parent="PlayerAvatar" unique_id=1687079089]
+z_index = 2
+layout_mode = 0
+offset_left = -1.0
+offset_top = -9.0
+offset_right = 104.0
+offset_bottom = 96.0
+mouse_filter = 2
+texture = ExtResource("18_avatar_frame")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="PlayerNameLabel" type="Label" parent="." unique_id=1687079090]
+layout_mode = 0
+offset_left = 98.0
+offset_top = 21.0
+offset_right = 198.0
+offset_bottom = 41.9375
+theme_override_colors/font_color = Color(0.972549, 0.98039216, 0.9882353, 1)
+theme_override_colors/font_outline_color = Color(0.02, 0.04, 0.08, 0.94)
+theme_override_constants/outline_size = 3
+theme_override_font_sizes/font_size = 15
+text = "Helios"
+horizontal_alignment = 1
+
+[node name="PlayerSummary" type="Control" parent="." unique_id=1687079087]
+anchors_preset = 0
+offset_left = 107.0
+offset_top = 47.0
+offset_right = 227.0
+offset_bottom = 95.0
+mouse_filter = 2
+
+[node name="BarracksIcon" type="TextureRect" parent="PlayerSummary" unique_id=2046730551]
+layout_mode = 0
+offset_left = 11.0
+offset_top = 29.0
+offset_right = 37.0
+offset_bottom = 55.0
+mouse_filter = 2
+texture = ExtResource("19_barracks_icon")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="BarracksCountLabel" type="Label" parent="PlayerSummary" unique_id=2136825922]
+layout_mode = 0
+offset_left = 38.0
+offset_top = 34.0
+offset_right = 72.0
+offset_bottom = 53.0
+theme_override_colors/font_color = Color(0.972549, 0.98039216, 0.9882353, 1)
+theme_override_colors/font_outline_color = Color(0.02, 0.04, 0.08, 0.94)
+theme_override_constants/outline_size = 3
+theme_override_font_sizes/font_size = 11
+text = "3"
+
+[node name="SoldierIcon" type="TextureRect" parent="PlayerSummary" unique_id=1376388660]
+layout_mode = 0
+offset_left = 6.0
+offset_top = -5.0
+offset_right = 42.0
+offset_bottom = 31.0
+mouse_filter = 2
+texture = ExtResource("20_soldier_icon")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="SoldierCountLabel" type="Label" parent="PlayerSummary" unique_id=135218208]
+layout_mode = 0
+offset_left = 36.0
 offset_top = 7.0
-offset_right = 730.0
-offset_bottom = 85.0
+offset_right = 70.0
+offset_bottom = 26.0
+theme_override_colors/font_color = Color(0.972549, 0.98039216, 0.9882353, 1)
+theme_override_colors/font_outline_color = Color(0.02, 0.04, 0.08, 0.94)
+theme_override_constants/outline_size = 3
+theme_override_font_sizes/font_size = 11
+text = "12"
+
+[node name="EliminatedLabel" type="Label" parent="PlayerSummary" unique_id=1953237353]
+visible = false
+layout_mode = 0
+offset_left = 62.0
+offset_top = 25.0
+offset_right = 118.0
+offset_bottom = 44.0
+theme_override_colors/font_color = Color(0.9882353, 0.64705884, 0.64705884, 1)
+theme_override_colors/font_outline_color = Color(0.02, 0.04, 0.08, 0.94)
+theme_override_constants/outline_size = 3
+theme_override_font_sizes/font_size = 11
+text = "已淘汰"
+
+[node name="HQHealthBar" type="ProgressBar" parent="." unique_id=1687079088]
+visible = false
+layout_mode = 0
+offset_left = 16.0
+offset_top = 50.0
+offset_right = 158.0
+offset_bottom = 60.0
+mouse_filter = 2
+value = 100.0
+show_percentage = false
+
+[node name="FactionStatsDisplay" type="Control" parent="." unique_id=290382848]
+visible = false
+z_index = 10
+anchors_preset = 0
+offset_left = 280.0
+offset_top = 4.0
+offset_right = 704.0
+offset_bottom = 104.0
 mouse_filter = 2
 script = ExtResource("3_stats")
 
-[node name="StatusLabel" type="Label" parent="." unique_id=290382849]
-layout_mode = 0
-offset_left = 274.0
-offset_top = 14.0
-offset_right = 688.0
-offset_bottom = 48.0
-theme_override_colors/font_color = Color(0.972549, 0.98039216, 0.9882353, 1)
-theme_override_colors/font_outline_color = Color(0.02, 0.04, 0.08, 0.92)
-theme_override_constants/outline_size = 4
-theme_override_font_sizes/font_size = 13
-text = "领地  我:24 红:18 紫:12 绿:09"
-horizontal_alignment = 2
-
-[node name="ArmyLabel" type="Label" parent="." unique_id=290382850]
-layout_mode = 0
-offset_left = 274.0
-offset_top = 45.0
-offset_right = 688.0
-offset_bottom = 71.0
-theme_override_colors/font_color = Color(0.8862745, 0.9098039, 0.9411765, 1)
-theme_override_colors/font_outline_color = Color(0.02, 0.04, 0.08, 0.92)
-theme_override_constants/outline_size = 4
-theme_override_font_sizes/font_size = 13
-text = "士兵  我:12 红:09 紫:07 绿:05"
-horizontal_alignment = 2
-
-[node name="BroadcastPanel" type="Panel" parent="." unique_id=1760018389]
-layout_mode = 0
-offset_left = 80.0
-offset_top = 110.0
-offset_right = 640.0
-offset_bottom = 156.0
+[node name="FactionStatsAuthoring" type="Control" parent="." unique_id=290382849]
+z_index = 20
+anchors_preset = 0
+offset_left = 414.0
+offset_top = 3.0
+offset_right = 720.0
+offset_bottom = 103.0
 mouse_filter = 2
-theme_override_styles/panel = SubResource("StyleBoxFlat_huevy")
 
-[node name="BroadcastLabel" type="Label" parent="BroadcastPanel" unique_id=2050141693]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-theme_override_colors/font_color = Color(0.99607843, 0.8862745, 0.8862745, 1)
-theme_override_colors/font_outline_color = Color(0.02, 0.04, 0.08, 0.92)
-theme_override_constants/outline_size = 4
-theme_override_font_sizes/font_size = 19
-text = "红方已淘汰"
+[node name="PlayerCard" type="ColorRect" parent="FactionStatsAuthoring" unique_id=290382850]
+layout_mode = 0
+offset_left = 17.0
+offset_right = 83.0
+offset_bottom = 83.0
+scale = Vector2(1.2, 1.2)
+pivot_offset = Vector2(33, 41.5)
+mouse_filter = 2
+color = Color(0.18, 0.34, 0.55, 0.92)
+
+[node name="Avatar" type="TextureRect" parent="FactionStatsAuthoring/PlayerCard" unique_id=290382851]
+layout_mode = 0
+offset_left = 3.0
+offset_top = 17.0
+offset_right = 34.0
+offset_bottom = 48.0
+mouse_filter = 2
+texture = ExtResource("5_avatar_blue")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="RankIcon" type="TextureRect" parent="FactionStatsAuthoring/PlayerCard" unique_id=290382852]
+layout_mode = 0
+offset_left = -1.0
+offset_top = 9.0
+offset_right = 19.0
+offset_bottom = 29.0
+mouse_filter = 2
+texture = ExtResource("9_rank_1")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="Name" type="Label" parent="FactionStatsAuthoring/PlayerCard" unique_id=290382853]
+layout_mode = 0
+offset_left = 24.0
+offset_top = 24.0
+offset_right = 62.0
+offset_bottom = 45.0
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.85)
+theme_override_constants/outline_size = 3
+theme_override_font_sizes/font_size = 12
+text = "玩家"
 horizontal_alignment = 1
-vertical_alignment = 1
 
-[node name="BottomStatusPanel" type="ColorRect" parent="." unique_id=1307528042]
+[node name="TileIcon" type="TextureRect" parent="FactionStatsAuthoring/PlayerCard" unique_id=290382854]
+layout_mode = 0
+offset_left = 11.0
+offset_top = 39.0
+offset_right = 56.0
+offset_bottom = 73.0
+mouse_filter = 2
+texture = ExtResource("13_tile_blue")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="TileCount" type="Label" parent="FactionStatsAuthoring/PlayerCard" unique_id=290382855]
+layout_mode = 0
+offset_left = 17.0
+offset_top = 41.0
+offset_right = 50.0
+offset_bottom = 65.0
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.9)
+theme_override_constants/outline_size = 3
+theme_override_font_sizes/font_size = 16
+text = "24"
+horizontal_alignment = 1
+
+[node name="RedCard" type="ColorRect" parent="FactionStatsAuthoring" unique_id=290382856]
+layout_mode = 0
+offset_left = 92.0
+offset_right = 163.0
+offset_bottom = 83.0
+mouse_filter = 2
+color = Color(0.48, 0.18, 0.2, 0.92)
+
+[node name="Avatar" type="TextureRect" parent="FactionStatsAuthoring/RedCard" unique_id=290382857]
+layout_mode = 0
+offset_left = 3.0
+offset_top = 17.0
+offset_right = 40.0
+offset_bottom = 53.0
+mouse_filter = 2
+texture = ExtResource("6_avatar_red")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="RankIcon" type="TextureRect" parent="FactionStatsAuthoring/RedCard" unique_id=290382858]
+layout_mode = 0
+offset_left = 1.0
+offset_top = 7.0
+offset_right = 22.0
+offset_bottom = 26.0
+mouse_filter = 2
+texture = ExtResource("10_rank_2")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="Name" type="Label" parent="FactionStatsAuthoring/RedCard" unique_id=290382859]
+layout_mode = 0
+offset_left = 28.0
+offset_top = 25.0
+offset_right = 66.0
+offset_bottom = 46.0
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.85)
+theme_override_constants/outline_size = 3
+theme_override_font_sizes/font_size = 12
+text = "红方"
+horizontal_alignment = 1
+
+[node name="TileIcon" type="TextureRect" parent="FactionStatsAuthoring/RedCard" unique_id=290382860]
 layout_mode = 0
 offset_left = 16.0
-offset_top = 1202.0
-offset_right = 326.0
-offset_bottom = 1264.0
+offset_top = 40.0
+offset_right = 61.0
+offset_bottom = 74.0
 mouse_filter = 2
-color = Color(1, 0.96, 0.82, 0.92)
+texture = ExtResource("14_tile_red")
+expand_mode = 1
+stretch_mode = 5
 
-[node name="BottomStatusLabel" type="Label" parent="." unique_id=1104288315]
+[node name="TileCount" type="Label" parent="FactionStatsAuthoring/RedCard" unique_id=290382861]
+layout_mode = 0
+offset_left = 21.0
+offset_top = 42.0
+offset_right = 54.0
+offset_bottom = 66.0
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.9)
+theme_override_constants/outline_size = 3
+theme_override_font_sizes/font_size = 16
+text = "18"
+horizontal_alignment = 1
+
+[node name="PurpleCard" type="ColorRect" parent="FactionStatsAuthoring" unique_id=290382862]
+layout_mode = 0
+offset_left = 165.0
+offset_right = 234.0
+offset_bottom = 83.0
+mouse_filter = 2
+color = Color(0.35, 0.2, 0.5, 0.92)
+
+[node name="Avatar" type="TextureRect" parent="FactionStatsAuthoring/PurpleCard" unique_id=290382863]
+layout_mode = 0
+offset_left = 3.0
+offset_top = 17.0
+offset_right = 38.0
+offset_bottom = 52.0
+mouse_filter = 2
+texture = ExtResource("7_avatar_purple")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="RankIcon" type="TextureRect" parent="FactionStatsAuthoring/PurpleCard" unique_id=290382864]
+layout_mode = 0
+offset_top = 6.0
+offset_right = 24.0
+offset_bottom = 28.0
+mouse_filter = 2
+texture = ExtResource("11_rank_3")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="Name" type="Label" parent="FactionStatsAuthoring/PurpleCard" unique_id=290382865]
+layout_mode = 0
+offset_left = 28.0
+offset_top = 25.0
+offset_right = 66.0
+offset_bottom = 46.0
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.85)
+theme_override_constants/outline_size = 3
+theme_override_font_sizes/font_size = 12
+text = "紫方"
+horizontal_alignment = 1
+
+[node name="TileIcon" type="TextureRect" parent="FactionStatsAuthoring/PurpleCard" unique_id=290382866]
+layout_mode = 0
+offset_left = 14.0
+offset_top = 39.0
+offset_right = 59.0
+offset_bottom = 73.0
+mouse_filter = 2
+texture = ExtResource("15_tile_purple")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="TileCount" type="Label" parent="FactionStatsAuthoring/PurpleCard" unique_id=290382867]
+layout_mode = 0
+offset_left = 22.0
+offset_top = 43.0
+offset_right = 55.0
+offset_bottom = 67.0
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.9)
+theme_override_constants/outline_size = 3
+theme_override_font_sizes/font_size = 16
+text = "12"
+horizontal_alignment = 1
+
+[node name="GreenCard" type="ColorRect" parent="FactionStatsAuthoring" unique_id=290382868]
+layout_mode = 0
+offset_left = 236.0
+offset_top = -1.0
+offset_right = 306.0
+offset_bottom = 82.0
+mouse_filter = 2
+color = Color(0.18, 0.45, 0.3, 0.92)
+
+[node name="Avatar" type="TextureRect" parent="FactionStatsAuthoring/GreenCard" unique_id=290382869]
+layout_mode = 0
+offset_left = 3.0
+offset_top = 17.0
+offset_right = 37.0
+offset_bottom = 51.0
+mouse_filter = 2
+texture = ExtResource("8_avatar_green")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="RankIcon" type="TextureRect" parent="FactionStatsAuthoring/GreenCard" unique_id=290382870]
+layout_mode = 0
+offset_left = -2.0
+offset_top = 7.0
+offset_right = 19.0
+offset_bottom = 28.0
+mouse_filter = 2
+texture = ExtResource("12_rank_4")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="Name" type="Label" parent="FactionStatsAuthoring/GreenCard" unique_id=290382871]
+layout_mode = 0
+offset_left = 27.0
+offset_top = 26.0
+offset_right = 65.0
+offset_bottom = 47.0
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.85)
+theme_override_constants/outline_size = 3
+theme_override_font_sizes/font_size = 12
+text = "绿方"
+horizontal_alignment = 1
+
+[node name="TileIcon" type="TextureRect" parent="FactionStatsAuthoring/GreenCard" unique_id=290382872]
+layout_mode = 0
+offset_left = 19.0
+offset_top = 41.0
+offset_right = 64.0
+offset_bottom = 75.0
+mouse_filter = 2
+texture = ExtResource("16_tile_green")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="TileCount" type="Label" parent="FactionStatsAuthoring/GreenCard" unique_id=290382873]
 layout_mode = 0
 offset_left = 26.0
-offset_top = 1216.0
-offset_right = 316.0
-offset_bottom = 1258.0
-text = "提示：点击己方领地旁的地块购买"
+offset_top = 43.0
+offset_right = 59.0
+offset_bottom = 67.0
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.9)
+theme_override_constants/outline_size = 3
+theme_override_font_sizes/font_size = 16
+text = "9"
+horizontal_alignment = 1
 
 [node name="GoldPanel" type="Panel" parent="." unique_id=1128157298]
 layout_mode = 0
-offset_left = 27.0
-offset_top = 17.0
-offset_right = 113.0
-offset_bottom = 40.0
+offset_left = 51.0
+offset_top = 1213.0
+offset_right = 181.0
+offset_bottom = 1253.0
 
 [node name="CastleLabel" type="Label" parent="." unique_id=1551192490]
 z_index = 1
 layout_mode = 0
-offset_left = 25.0
-offset_top = 112.0
-offset_right = 62.0
-offset_bottom = 132.0
+offset_left = 33.0
+offset_top = 188.0
+offset_right = 70.0
+offset_bottom = 208.0
 theme_override_colors/font_color = Color(0.972549, 0.98039216, 0.9882353, 1)
 theme_override_colors/font_outline_color = Color(0.02, 0.04, 0.08, 0.92)
 theme_override_constants/outline_size = 4

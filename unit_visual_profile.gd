@@ -31,6 +31,10 @@ const ANIMATION_FPS := {
 	"death": 10.0
 }
 
+# Runtime movement keeps six logical hex directions, while animated atlases
+# author four cardinal/isometric views: down, left, right, and up.
+const ANIMATION_DIRECTION_FOR_VISUAL_DIRECTION := [0, 3, 1, 3, 0, 2]
+
 @export var profile_id := ""
 @export var visual_tier := VisualTier.CROWD
 @export var base_texture: Texture2D
@@ -90,7 +94,11 @@ func frame_index(animation_name: String, direction: int, elapsed: float, lod_lev
 		fps = 4.0
 		count = mini(count, 2)
 	var local_frame := int(floor(elapsed * fps)) % maxi(1, count)
-	return clampi(direction, 0, DIRECTION_COUNT - 1) * FRAMES_PER_DIRECTION + int(ANIMATION_OFFSETS[state]) + local_frame
+	var animation_direction := animation_direction_for_visual_direction(direction)
+	return animation_direction * FRAMES_PER_DIRECTION + int(ANIMATION_OFFSETS[state]) + local_frame
+
+static func animation_direction_for_visual_direction(direction: int) -> int:
+	return int(ANIMATION_DIRECTION_FOR_VISUAL_DIRECTION[clampi(direction, 0, ANIMATION_DIRECTION_FOR_VISUAL_DIRECTION.size() - 1)])
 
 func normalized_frame(animation_name: String, direction: int, elapsed: float, lod_level: int) -> float:
 	var total_frames := maxi(1, atlas_columns * atlas_rows)

@@ -2,18 +2,13 @@ class_name SettlementUI
 extends Control
 
 const Config := preload("res://game_config.gd")
+const HeroAvatarCatalogScript := preload("res://hero_avatar_catalog.gd")
 const TileIconScript := preload("res://settlement_tile_icon.gd")
 const HEADER_ART := preload("res://assets/generated/settlement/header.png")
 const MEDAL_ART := {
 	1: preload("res://assets/generated/settlement/medal_gold.png"),
 	2: preload("res://assets/generated/settlement/medal_silver.png"),
 	3: preload("res://assets/generated/settlement/medal_bronze.png")
-}
-const AVATAR_ART := {
-	Config.FACTION_PLAYER: preload("res://assets/generated/settlement/avatar_blue.png"),
-	Config.FACTION_RED: preload("res://assets/generated/settlement/avatar_red.png"),
-	Config.FACTION_PURPLE: preload("res://assets/generated/settlement/avatar_purple.png"),
-	Config.FACTION_GREEN: preload("res://assets/generated/settlement/avatar_green.png")
 }
 
 var ui_config: UIEditorConfig = preload("res://ui_editor_config.tres")
@@ -283,8 +278,8 @@ func _update_row(index: int, data: Dictionary) -> void:
 	row_rank_art[index].visible = enabled and rank <= 3 and MEDAL_ART.has(rank)
 	row_rank_labels[index].text = str(rank) if enabled and rank > 3 else ""
 	row_rank_labels[index].visible = enabled and rank > 3
-	row_avatar_art[index].texture = AVATAR_ART.get(faction, null)
-	row_avatar_art[index].visible = enabled and AVATAR_ART.has(faction)
+	row_avatar_art[index].texture = HeroAvatarCatalogScript.get_for_faction(faction)
+	row_avatar_art[index].visible = enabled and row_avatar_art[index].texture != null
 	row_avatar_placeholders[index].visible = not row_avatar_art[index].visible
 	row_name_labels[index].text = str(data.get("name", "未启用阵营"))
 	row_name_labels[index].modulate = Color.WHITE if enabled else Color(0.55, 0.58, 0.64, 1.0)
@@ -296,7 +291,7 @@ func _update_row(index: int, data: Dictionary) -> void:
 
 func _update_player_summary(data: Dictionary) -> void:
 	var faction := int(data.get("faction", Config.FACTION_PLAYER))
-	player_summary_avatar.texture = AVATAR_ART.get(faction, null)
+	player_summary_avatar.texture = HeroAvatarCatalogScript.get_for_faction(faction)
 	player_summary_name.text = str(data.get("name", "玩家"))
 	player_summary_survival.text = _format_time(float(data.get("survival_time", 0.0)))
 	player_summary_tiles.text = str(int(data.get("territories", 0)))

@@ -18,11 +18,13 @@ var _last_signature := ""
 @onready var player_info_button: Button = $PlayerInfoButton
 @onready var hq_health_bar: ProgressBar = $HQHealthBar
 @onready var timer_label: Label = $TimerLabel
-@onready var status_label: Label = $StatusLabel
-@onready var army_label: Label = $ArmyLabel
+@onready var status_label: Label = get_node_or_null("StatusLabel") as Label
+@onready var army_label: Label = get_node_or_null("ArmyLabel") as Label
 @onready var faction_stats: Control = $FactionStatsDisplay
 @onready var broadcast_panel: Panel = $BroadcastPanel
+@onready var broadcast_label: Label = get_node_or_null("BroadcastPanel/BroadcastLabel") as Label
 @onready var bottom_status_panel: ColorRect = $BottomStatusPanel
+@onready var bottom_status_label: Label = get_node_or_null("BottomStatusLabel") as Label
 
 func _ready() -> void:
 	_apply_preview()
@@ -45,12 +47,18 @@ func _notification(what: int) -> void:
 func _config_signature() -> String:
 	if ui_config == null:
 		return str(size)
-	return "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s" % [
+	return "|".join(PackedStringArray([
 		str(size), str(ui_config.player_info_button_rect), str(ui_config.gold_icon_rect),
 		str(ui_config.gold_label_rect), str(ui_config.fps_label_rect), str(ui_config.hq_health_bar_rect),
 		str(ui_config.timer_rect), str(ui_config.status_label_rect), str(ui_config.army_label_rect),
-		str(ui_config.faction_stats_position), str(ui_config.faction_stats_size)
-	]
+		str(ui_config.faction_stats_position), str(ui_config.faction_stats_size),
+		str(ui_config.faction_stats_avatar_size), str(ui_config.faction_stats_avatar_offset),
+		str(ui_config.faction_stats_rank_icon_size), str(ui_config.faction_stats_rank_icon_offset),
+		str(ui_config.faction_stats_name_rect), str(ui_config.faction_stats_name_font_size),
+		str(ui_config.faction_stats_tile_rect), str(ui_config.faction_stats_tile_count_offset),
+		str(ui_config.faction_stats_tile_count_font_size), str(ui_config.faction_stats_animation_duration),
+		str(ui_config.faction_stats_first_card_scale)
+	]))
 
 func _apply_preview() -> void:
 	if not is_instance_valid(backdrop) or ui_config == null:
@@ -61,11 +69,15 @@ func _apply_preview() -> void:
 
 	fps_label.text = "FPS 60"
 	gold_label.text = "金币  12"
-	status_label.text = "领地  我:24 红:18 紫:12 绿:09"
-	army_label.text = "士兵  我:12 红:09 紫:07 绿:05"
+	if status_label != null:
+		status_label.text = "领地  我:24 红:18 紫:12 绿:09"
+	if army_label != null:
+		army_label.text = "士兵  我:12 红:09 紫:07 绿:05"
 	timer_label.text = "08:42"
-	$BroadcastPanel/BroadcastLabel.text = "红方已淘汰"
-	$BottomStatusLabel.text = "提示：点击己方领地旁的地块购买"
+	if broadcast_label != null:
+		broadcast_label.text = "红方已淘汰"
+	if bottom_status_label != null:
+		bottom_status_label.text = "提示：点击己方领地旁的地块购买"
 	player_info_button.text = ""
 	player_info_button.tooltip_text = "城堡信息"
 	hq_health_bar.value = Config.HQ_MAX_HP * 0.72
@@ -90,39 +102,3 @@ func _layout_preview() -> void:
 		viewport_size = Vector2(720.0, 1280.0)
 	backdrop.position = Vector2.ZERO
 	backdrop.size = viewport_size
-	var player_rect := ui_config.player_info_button_rect
-	player_info_button.position = player_rect.position
-	player_info_button.size = player_rect.size
-	var gold_rect := ui_config.gold_icon_rect
-	gold_icon.position = gold_rect.position
-	gold_icon.size = gold_rect.size
-	var gold_label_rect := ui_config.gold_label_rect
-	gold_label.position = gold_label_rect.position
-	gold_label.size = gold_label_rect.size
-	var fps_rect := ui_config.fps_label_rect
-	fps_label.position = fps_rect.position
-	fps_label.size = fps_rect.size
-	var hq_rect := ui_config.hq_health_bar_rect
-	hq_health_bar.position = hq_rect.position
-	hq_health_bar.size = hq_rect.size
-	var timer_rect := ui_config.timer_rect
-	timer_label.position = timer_rect.position
-	timer_label.size = Vector2(maxf(1.0, timer_rect.size.x if timer_rect.size.x > 0.0 else viewport_size.x + timer_rect.size.x - timer_rect.position.x), timer_rect.size.y)
-	var status_rect := ui_config.status_label_rect
-	status_label.position = Vector2(maxf(1.0, viewport_size.x + status_rect.position.x), status_rect.position.y)
-	status_label.size = Vector2(minf(status_rect.size.x, maxf(1.0, viewport_size.x - 32.0)), status_rect.size.y)
-	var army_rect := ui_config.army_label_rect
-	army_label.position = Vector2(maxf(1.0, viewport_size.x + army_rect.position.x), army_rect.position.y)
-	army_label.size = Vector2(minf(army_rect.size.x, maxf(1.0, viewport_size.x - 32.0)), army_rect.size.y)
-	var required_stats_size := Vector2(42.0 + float(Config.FACTION_IDS.size()) * ui_config.faction_stats_column_spacing, 78.0)
-	var stats_size := Vector2(maxf(ui_config.faction_stats_minimum_size.x, maxf(ui_config.faction_stats_size.x, required_stats_size.x)), maxf(ui_config.faction_stats_minimum_size.y, maxf(ui_config.faction_stats_size.y, required_stats_size.y)))
-	faction_stats.position = Vector2(maxf(8.0, viewport_size.x - stats_size.x + ui_config.faction_stats_position.x), ui_config.faction_stats_position.y)
-	faction_stats.size = stats_size
-	var broadcast_rect := ui_config.broadcast_rect
-	broadcast_panel.position = Vector2((viewport_size.x - minf(broadcast_rect.size.x, viewport_size.x - 32.0)) * 0.5 + broadcast_rect.position.x, broadcast_rect.position.y)
-	broadcast_panel.size = Vector2(minf(broadcast_rect.size.x, viewport_size.x - 32.0), broadcast_rect.size.y)
-	var bottom_rect := ui_config.bottom_status_rect
-	bottom_status_panel.position = Vector2(bottom_rect.position.x, viewport_size.y + bottom_rect.position.y)
-	bottom_status_panel.size = Vector2(minf(bottom_rect.size.x, viewport_size.x - 32.0), bottom_rect.size.y)
-	$BottomStatusLabel.position = bottom_status_panel.position + Vector2(10.0, 14.0)
-	$BottomStatusLabel.size = Vector2(maxf(1.0, bottom_status_panel.size.x - 20.0), maxf(1.0, bottom_status_panel.size.y - 20.0))

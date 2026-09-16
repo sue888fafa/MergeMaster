@@ -54,6 +54,7 @@ var dispatched := false
 var monster_target: Node = null
 var combat_target: Dictionary = {}
 var combat_target_refresh_timer := 0.0
+var has_fought_player := false
 var monster_interrupt_timer := 0.0
 var frozen_until := 0.0
 var batch_rendered := false
@@ -61,6 +62,8 @@ var visual_elapsed := 0.0
 var visual_action := "idle"
 var visual_action_remaining := 0.0
 var visual_direction := 0
+var attack_facing_position := Vector2.ZERO
+var attack_facing_active := false
 var legacy_sprite: Sprite2D
 
 func setup(owner: int, start_cell: Vector2i, controller: Node, source_level: int = 1, source_class: int = Config.UNIT_CLASS_WARRIOR) -> void:
@@ -87,6 +90,7 @@ func setup(owner: int, start_cell: Vector2i, controller: Node, source_level: int
 	monster_target = null
 	combat_target.clear()
 	combat_target_refresh_timer = 0.0
+	has_fought_player = false
 	monster_interrupt_timer = 0.0
 	frozen_until = 0.0
 	position = main_ref.board.get_cell_world_center(cell) if main_ref.board.has_method("get_cell_world_center") else main_ref.board.axial_to_world(cell)
@@ -135,6 +139,7 @@ func clear_monster_target() -> void:
 func invalidate_combat_target() -> void:
 	combat_target.clear()
 	combat_target_refresh_timer = 0.0
+	attack_facing_active = false
 
 func is_targeting_monster(monster: Node) -> bool:
 	return is_instance_valid(monster_target) and monster_target == monster
@@ -208,7 +213,10 @@ func _process(delta: float) -> void:
 	var movement := position - previous_position
 	if movement.length_squared() > 0.01:
 		_update_visual_direction(movement)
+	if visual_action == "attack" and attack_facing_active:
+		face_toward(attack_facing_position)
 	if visual_action_remaining <= 0.0:
+		attack_facing_active = false
 		visual_action = "move" if moving else "idle"
 
 func move_directly_to(target_position: Vector2, delta: float) -> void:
@@ -242,13 +250,29 @@ func move_directly_to(target_position: Vector2, delta: float) -> void:
 func can_attack() -> bool:
 	return attack_cooldown <= 0.0
 
-func mark_attack() -> void:
+func mark_attack(target_position: Vector2 = Vector2.ZERO) -> void:
+	if target_position != Vector2.ZERO:
+		attack_facing_position = target_position
+		attack_facing_active = true
+		face_toward(target_position)
 	attack_cooldown = attack_interval
 	visual_action = "attack"
 	visual_action_remaining = 0.50
 	visual_elapsed = 0.0
 
-func take_damage(amount: float, _attacker: Node = null) -> void:
+func mark_fought_player() -> void:
+	if faction != Config.FACTION_PLAYER:
+		has_fought_player = true
+		queue_redraw()
+
+func take_damage(amount: float, attacker: Node = null) -> void:
+	if is_instance_valid(attacker) and attacker.get("faction") != null:
+		var attacker_faction := int(attacker.get("faction"))
+		if faction == Config.FACTION_PLAYER and attacker_faction != Config.FACTION_PLAYER:
+			if attacker.has_method("mark_fought_player"):
+				attacker.call("mark_fought_player")
+		elif faction != Config.FACTION_PLAYER and attacker_faction == Config.FACTION_PLAYER:
+			has_fought_player = true
 	hp -= amount
 	visual_action = "death" if hp <= 0.0 else "hit"
 	visual_action_remaining = 0.60 if hp <= 0.0 else 0.20
@@ -277,7 +301,7 @@ func _draw() -> void:
 		draw_arc(Vector2.ZERO, 19.0, 0.0, TAU, 20, Color(0.35, 0.9, 1.0, 0.82), 2.0, true)
 		draw_line(Vector2(-13.0, -15.0), Vector2(-7.0, -21.0), Color("#cffafe"), 2.0, true)
 		draw_line(Vector2(7.0, -21.0), Vector2(13.0, -15.0), Color("#cffafe"), 2.0, true)
-	if hp < max_hp:
+	if hp < max_hp and (faction == Config.FACTION_PLAYER or has_fought_player):
 		draw_rect(Rect2(-12, -17, 24, 3), Color("#0f172a"), true)
 		var health_fill_color := Color("#4ade80") if faction == Config.FACTION_PLAYER else Color("#ef4444")
 		draw_rect(Rect2(-12, -17, 24 * clamp(hp / max_hp, 0.0, 1.0), 3), health_fill_color, true)
@@ -338,6 +362,9 @@ func face_toward(target_position: Vector2) -> void:
 		_apply_legacy_facing()
 	if visual_direction != previous_direction:
 		queue_redraw()
+		var visual_layer = main_ref.get("units_layer") if is_instance_valid(main_ref) else null
+		if is_instance_valid(visual_layer) and visual_layer.has_method("request_visual_refresh"):
+			visual_layer.call("request_visual_refresh")
 
 static func direction_frame_for_movement(movement: Vector2) -> int:
 	if movement.length_squared() < 0.0001:
