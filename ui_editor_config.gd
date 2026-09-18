@@ -108,17 +108,17 @@ extends Resource
 @export var card_event_panel_offset := Vector2.ZERO
 @export var card_draw_confirm_button_rect := Rect2(178.0, 420.0, 126.0, 42.0)
 @export var card_draw_countdown_rect := Rect2(320.0, 426.0, 150.0, 30.0)
-@export var divination_panel_size := Vector2(620.0, 470.0)
+@export var divination_panel_size := Vector2(620.0, 620.0)
 @export var divination_panel_offset := Vector2.ZERO
 @export var intelligence_panel_size := Vector2(620.0, 380.0)
 @export var intelligence_panel_offset := Vector2.ZERO
 @export var merchant_arrival_panel_size := Vector2(620.0, 480.0)
 @export var merchant_arrival_panel_offset := Vector2.ZERO
-@export var merchant_shop_panel_size := Vector2(660.0, 500.0)
+@export var merchant_shop_panel_size := Vector2(660.0, 660.0)
 @export var merchant_shop_panel_offset := Vector2.ZERO
 @export var defeat_panel_size := Vector2(620.0, 280.0)
 @export var defeat_panel_offset := Vector2.ZERO
-@export var settlement_panel_size := Vector2(680.0, 1140.0)
+@export var settlement_panel_size := Vector2(620.0, 620.0)
 @export var settlement_panel_offset := Vector2.ZERO
 @export var settlement_confirm_button_rect := Rect2(0.0, 950.0, 180.0, 54.0)
 

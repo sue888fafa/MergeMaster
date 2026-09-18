@@ -50,6 +50,7 @@ var profession_race := Config.UNIT_RACE_HORDE
 var is_ranged := false
 var returning_home := false
 var garrisoned := false
+var garrison_slot := -1
 var dispatched := false
 var monster_target: Node = null
 var combat_target: Dictionary = {}
@@ -65,6 +66,8 @@ var visual_direction := 0
 var attack_facing_position := Vector2.ZERO
 var attack_facing_active := false
 var legacy_sprite: Sprite2D
+var hit_flash_remaining := 0.0
+const HIT_FLASH_DURATION := 0.12
 
 func setup(owner: int, start_cell: Vector2i, controller: Node, source_level: int = 1, source_class: int = Config.UNIT_CLASS_WARRIOR) -> void:
 	faction = owner
@@ -86,6 +89,7 @@ func setup(owner: int, start_cell: Vector2i, controller: Node, source_level: int
 	is_ranged = bool(Config.UNIT_CLASS_IS_RANGED[unit_class])
 	returning_home = false
 	garrisoned = false
+	garrison_slot = -1
 	dispatched = false
 	monster_target = null
 	combat_target.clear()
@@ -93,6 +97,7 @@ func setup(owner: int, start_cell: Vector2i, controller: Node, source_level: int
 	has_fought_player = false
 	monster_interrupt_timer = 0.0
 	frozen_until = 0.0
+	hit_flash_remaining = 0.0
 	position = main_ref.board.get_cell_world_center(cell) if main_ref.board.has_method("get_cell_world_center") else main_ref.board.axial_to_world(cell)
 	batch_rendered = get_parent() != null and get_parent().has_method("is_batch_unit_layer")
 	visible = not batch_rendered
@@ -156,6 +161,7 @@ func is_frozen() -> bool:
 func begin_return_home() -> void:
 	if returning_home:
 		return
+	_release_garrison_slot()
 	garrisoned = false
 	returning_home = true
 	moving = true
@@ -170,12 +176,14 @@ func cancel_return_home() -> void:
 func begin_garrison() -> void:
 	dispatched = false
 	returning_home = false
+	_allocate_garrison_slot()
 	garrisoned = true
 	moving = true
 	destination = home_cell
 	queue_redraw()
 
 func leave_garrison() -> void:
+	_release_garrison_slot()
 	dispatched = true
 	garrisoned = false
 	moving = false
@@ -185,6 +193,7 @@ func dispatch_from_barracks() -> void:
 	# Once a soldier leaves the barracks, it becomes a persistent field unit.
 	# New targets are still discovered only inside its barracks dispatch area;
 	# the unit is never recalled automatically.
+	_release_garrison_slot()
 	dispatched = true
 	returning_home = false
 	garrisoned = false
@@ -202,11 +211,30 @@ func move_to_garrison_door(delta: float) -> void:
 	if not moving:
 		position = target_position
 
+func _allocate_garrison_slot() -> void:
+	if garrison_slot >= 0 or main_ref == null or not main_ref.has_method("_allocate_barracks_garrison_slot"):
+		return
+	garrison_slot = int(main_ref.call("_allocate_barracks_garrison_slot", home_cell, self))
+
+func _release_garrison_slot() -> void:
+	if garrison_slot < 0:
+		return
+	if main_ref != null and main_ref.has_method("_release_barracks_garrison_slot"):
+		main_ref.call("_release_barracks_garrison_slot", self)
+	garrison_slot = -1
+
 func _process(delta: float) -> void:
 	if main_ref == null or main_ref.game_over:
 		return
 	visual_elapsed += delta
 	visual_action_remaining = maxf(0.0, visual_action_remaining - delta)
+	if hit_flash_remaining > 0.0:
+		hit_flash_remaining = maxf(0.0, hit_flash_remaining - delta)
+		if batch_rendered and is_instance_valid(main_ref) and main_ref.get("units_layer") != null:
+			var visual_layer = main_ref.get("units_layer")
+			if is_instance_valid(visual_layer) and visual_layer.has_method("request_visual_refresh"):
+				visual_layer.call("request_visual_refresh")
+		queue_redraw()
 	attack_cooldown = max(0.0, attack_cooldown - delta)
 	var previous_position := position
 	main_ref.process_unit(self, delta)
@@ -273,6 +301,17 @@ func take_damage(amount: float, attacker: Node = null) -> void:
 				attacker.call("mark_fought_player")
 		elif faction != Config.FACTION_PLAYER and attacker_faction == Config.FACTION_PLAYER:
 			has_fought_player = true
+		if faction == Config.FACTION_PLAYER or attacker_faction == Config.FACTION_PLAYER:
+			hit_flash_remaining = HIT_FLASH_DURATION
+	else:
+		# Monster attacks do not carry a faction node, but damage to the player's
+		# soldiers still needs the same hit feedback.
+		if faction == Config.FACTION_PLAYER:
+			hit_flash_remaining = HIT_FLASH_DURATION
+	if batch_rendered and is_instance_valid(main_ref):
+		var visual_layer = main_ref.get("units_layer")
+		if is_instance_valid(visual_layer) and visual_layer.has_method("request_visual_refresh"):
+			visual_layer.call("request_visual_refresh")
 	hp -= amount
 	visual_action = "death" if hp <= 0.0 else "hit"
 	visual_action_remaining = 0.60 if hp <= 0.0 else 0.20
@@ -297,6 +336,8 @@ func _draw() -> void:
 	draw_circle(Vector2(0.0, -1.0), 15.5, Color(body, 0.16))
 	var sprite_index := clampi(unit_class, 0, UNIT_ART.size() - 1)
 	_update_legacy_sprite(sprite_index, visual_scale)
+	if hit_flash_remaining > 0.0:
+		draw_circle(Vector2.ZERO, 17.0, Color(1.0, 0.12, 0.12, 0.22))
 	if is_frozen():
 		draw_arc(Vector2.ZERO, 19.0, 0.0, TAU, 20, Color(0.35, 0.9, 1.0, 0.82), 2.0, true)
 		draw_line(Vector2(-13.0, -15.0), Vector2(-7.0, -21.0), Color("#cffafe"), 2.0, true)
@@ -322,6 +363,9 @@ func _make_legacy_material() -> ShaderMaterial:
 	material.set_shader_parameter("atlas_grid", Vector2.ONE)
 	material.set_shader_parameter("frame_uv_size", Vector2.ONE)
 	material.set_shader_parameter("has_faction_mask", true)
+	# A fallback Sprite2D has no MultiMesh INSTANCE_CUSTOM tint data; use the
+	# per-unit faction_tint uniform instead.
+	material.set_shader_parameter("use_instance_tint", false)
 	material.set_shader_parameter("faction_mask", UNIT_MASKS[clampi(unit_class, 0, UNIT_MASKS.size() - 1)])
 	return material
 
@@ -337,7 +381,7 @@ func _update_legacy_sprite(sprite_index: int, visual_scale: float) -> void:
 	# the left-facing atlas directions so it still follows horizontal travel;
 	# the batch renderer uses the full six-direction runtime atlas.
 	_apply_legacy_facing()
-	legacy_sprite.modulate = Color.WHITE
+	legacy_sprite.modulate = Color("#ff3b3b") if hit_flash_remaining > 0.0 else Color.WHITE
 	var material := legacy_sprite.material as ShaderMaterial
 	if material != null:
 		material.set_shader_parameter("faction_mask", UNIT_MASKS[sprite_index])

@@ -2,20 +2,67 @@
 
 [ext_resource type="Script" uid="uid://bwjwroxivjgfx" path="res://divination_house_art.gd" id="1_art"]
 [ext_resource type="Script" uid="uid://canq4wmed0sd" path="res://divination_target_display.gd" id="2_target"]
+[ext_resource type="Texture2D" uid="uid://chhv8ip1ldpdq" path="res://assets/generated/ui/divination/event_card.png" id="4_event_card"]
+[ext_resource type="Texture2D" uid="uid://d1yye7okvwcet" path="res://assets/generated/ui/divination/event_gain_barracks.png" id="5_event_gain"]
+[ext_resource type="Texture2D" uid="uid://brqx840ijis5s" path="res://assets/generated/ui/divination/event_lose_barracks.png" id="6_event_lose"]
+[ext_resource type="Texture2D" uid="uid://b6wfmsjyy8r7y" path="res://assets/generated/ui/divination/event_gold.png" id="7_event_gold"]
+[ext_resource type="Texture2D" uid="uid://rst6c5nmkivi" path="res://assets/generated/ui/divination/event_upgrade_barracks.png" id="8_event_upgrade"]
+[ext_resource type="Texture2D" uid="uid://7sbdqnmd3bfo" path="res://assets/generated/ui/divination/event_downgrade_barracks.png" id="9_event_downgrade"]
+[ext_resource type="Script" uid="uid://b35y8arl2chl1" path="res://divination_event_highlight.gd" id="10_highlight"]
+[ext_resource type="Texture2D" uid="uid://chxhbynir5vih" path="res://assets/generated/ui/divination/divination_background.png" id="11_background"]
+[ext_resource type="Texture2D" uid="uid://b0em4eomu7e3p" path="res://assets/generated/ui/divination/divination_bubble.png" id="12_bubble"]
+[ext_resource type="Texture2D" uid="uid://c60gqtfpjk8sq" path="res://assets/generated/ui/divination/divination_close.png" id="13_close"]
+[ext_resource type="Script" uid="uid://glxufjsv7dv7" path="res://divination_crystal_effect.gd" id="14_crystal_effect"]
 
-[sub_resource type="StyleBoxFlat" id="StylePanel"]
-bg_color = Color(0.12, 0.08, 0.24, 1)
+[sub_resource type="StyleBoxEmpty" id="StylePanel"]
+
+[sub_resource type="StyleBoxFlat" id="StyleSummonNormal"]
+bg_color = Color(0.98, 0.72, 0.08, 1)
 border_width_left = 2
 border_width_top = 2
 border_width_right = 2
 border_width_bottom = 2
-border_color = Color(0.55, 0.42, 0.86, 1)
-corner_radius_top_left = 12
-corner_radius_top_right = 12
-corner_radius_bottom_right = 12
-corner_radius_bottom_left = 12
-shadow_color = Color(0, 0, 0, 0.35)
-shadow_size = 10
+border_color = Color(0.55, 0.32, 0.02, 1)
+corner_radius_top_left = 15
+corner_radius_top_right = 15
+corner_radius_bottom_right = 15
+corner_radius_bottom_left = 15
+
+[sub_resource type="StyleBoxFlat" id="StyleSummonPressed"]
+bg_color = Color(0.86, 0.56, 0.03, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.38, 0.22, 0.01, 1)
+corner_radius_top_left = 15
+corner_radius_top_right = 15
+corner_radius_bottom_right = 15
+corner_radius_bottom_left = 15
+
+[sub_resource type="StyleBoxFlat" id="StyleSummonHover"]
+bg_color = Color(1, 0.82, 0.18, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.55, 0.32, 0.02, 1)
+corner_radius_top_left = 15
+corner_radius_top_right = 15
+corner_radius_bottom_right = 15
+corner_radius_bottom_left = 15
+
+[sub_resource type="StyleBoxFlat" id="StyleSummonDisabled"]
+bg_color = Color(0.62, 0.56, 0.34, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.32, 0.29, 0.2, 1)
+corner_radius_top_left = 15
+corner_radius_top_right = 15
+corner_radius_bottom_right = 15
+corner_radius_bottom_left = 15
 
 [node name="DivinationUI" type="Control" unique_id=621527939]
 layout_mode = 3
@@ -39,15 +86,127 @@ color = Color(0.01, 0.02, 0.06, 0.46)
 [node name="DivinationHouse" type="Panel" parent="." unique_id=1825582613]
 layout_mode = 0
 offset_right = 620.0
-offset_bottom = 470.0
+offset_bottom = 620.0
 mouse_filter = 2
 theme_override_styles/panel = SubResource("StylePanel")
 
-[node name="DivinationHouseArt" type="Control" parent="DivinationHouse" unique_id=252300564]
-anchors_preset = 0
-offset_top = 38.0
+[node name="DivinationBackground" type="TextureRect" parent="DivinationHouse" unique_id=196523056]
+layout_mode = 0
 offset_right = 620.0
-offset_bottom = 348.0
+offset_bottom = 620.0
+mouse_filter = 2
+texture = ExtResource("11_background")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="DivinationCrystalEffect" type="Control" parent="DivinationHouse" unique_id=196523063]
+anchors_preset = 0
+offset_right = 620.0
+offset_bottom = 620.0
+mouse_filter = 2
+script = ExtResource("14_crystal_effect")
+
+[node name="DivinationBubble" type="TextureRect" parent="DivinationHouse" unique_id=196523061]
+visible = false
+layout_mode = 0
+offset_left = 94.0
+offset_top = 116.0
+offset_right = 574.0
+offset_bottom = 314.0
+mouse_filter = 2
+texture = ExtResource("12_bubble")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="DivinationCloseButton" type="TextureButton" parent="DivinationHouse" unique_id=196523062]
+layout_mode = 0
+offset_left = 510.0
+offset_top = 44.0
+offset_right = 590.0
+offset_bottom = 126.0
+mouse_default_cursor_shape = 2
+texture_normal = ExtResource("13_close")
+ignore_texture_size = true
+stretch_mode = 5
+
+[node name="EventIcons" type="Control" parent="DivinationHouse" unique_id=1688465235]
+anchors_preset = 0
+offset_right = 620.0
+offset_bottom = 620.0
+mouse_filter = 2
+
+[node name="DesktopEventCard0" type="TextureRect" parent="DivinationHouse/EventIcons" unique_id=1862032988]
+layout_mode = 0
+offset_left = 151.0
+offset_top = 435.0
+offset_right = 191.0
+offset_bottom = 475.0
+mouse_filter = 2
+texture = ExtResource("4_event_card")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="DesktopEventCard1" type="TextureRect" parent="DivinationHouse/EventIcons" unique_id=2096647689]
+layout_mode = 0
+offset_left = 193.0
+offset_top = 393.0
+offset_right = 251.0
+offset_bottom = 451.0
+mouse_filter = 2
+texture = ExtResource("5_event_gain")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="DesktopEventCard2" type="TextureRect" parent="DivinationHouse/EventIcons" unique_id=1429712429]
+layout_mode = 0
+offset_left = 370.0
+offset_top = 392.0
+offset_right = 437.0
+offset_bottom = 459.0
+mouse_filter = 2
+texture = ExtResource("6_event_lose")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="DesktopEventCard3" type="TextureRect" parent="DivinationHouse/EventIcons" unique_id=1062040558]
+layout_mode = 0
+offset_left = 427.0
+offset_top = 433.0
+offset_right = 472.0
+offset_bottom = 478.0
+mouse_filter = 2
+texture = ExtResource("7_event_gold")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="DesktopEventCard4" type="TextureRect" parent="DivinationHouse/EventIcons" unique_id=1726469471]
+layout_mode = 0
+offset_left = 334.0
+offset_top = 436.0
+offset_right = 390.0
+offset_bottom = 492.0
+mouse_filter = 2
+texture = ExtResource("8_event_upgrade")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="DesktopEventCard5" type="TextureRect" parent="DivinationHouse/EventIcons" unique_id=728615511]
+layout_mode = 0
+offset_left = 227.0
+offset_top = 431.0
+offset_right = 286.0
+offset_bottom = 490.0
+mouse_filter = 2
+texture = ExtResource("9_event_downgrade")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="DivinationHouseArt" type="Control" parent="DivinationHouse" unique_id=252300564]
+visible = false
+anchors_preset = 0
+offset_top = 59.0
+offset_right = 620.0
+offset_bottom = 369.0
 mouse_filter = 2
 script = ExtResource("1_art")
 
@@ -64,25 +223,83 @@ horizontal_alignment = 1
 
 [node name="DivinationTarget" type="Label" parent="DivinationHouse" unique_id=1295761938]
 layout_mode = 0
+offset_left = 300.0
+offset_top = 130.0
+offset_right = 451.0
+offset_bottom = 172.0
+theme_override_colors/font_color = Color(0.591713, 0.004116912, 0.9611315, 1)
+theme_override_font_sizes/font_size = 22
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="DivinationTargetText" type="Label" parent="DivinationHouse" unique_id=196523057]
+layout_mode = 0
+offset_left = 188.0
+offset_top = 152.0
+offset_right = 394.0
+offset_bottom = 194.0
+theme_override_colors/font_color = Color(0.40626743, 0.1548233, 0.3796946, 1)
+
+[node name="DivinationEventText" type="Label" parent="DivinationHouse" unique_id=196523058]
+layout_mode = 0
 offset_left = 24.0
-offset_top = 50.0
+offset_top = 173.0
 offset_right = 596.0
-offset_bottom = 76.0
-theme_override_colors/font_color = Color(0.78, 0.61, 1, 1)
+offset_bottom = 211.0
+theme_override_colors/font_color = Color(0.48, 0.32, 0.66, 1)
 theme_override_font_sizes/font_size = 18
 horizontal_alignment = 1
 vertical_alignment = 1
 
+[node name="DivinationEventObject" type="TextureRect" parent="DivinationHouse" unique_id=196523059]
+layout_mode = 0
+offset_left = 280.0
+offset_top = 292.0
+offset_right = 340.0
+offset_bottom = 352.0
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 5
+
+[node name="DivinationStartButton" type="Button" parent="DivinationHouse" unique_id=196523060]
+layout_mode = 0
+offset_left = 220.0
+offset_top = 450.0
+offset_right = 400.0
+offset_bottom = 508.0
+mouse_default_cursor_shape = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_pressed_color = Color(1, 1, 1, 1)
+theme_override_colors/font_hover_color = Color(1, 1, 1, 1)
+theme_override_colors/font_disabled_color = Color(0.84, 0.84, 0.76, 1)
+theme_override_colors/font_outline_color = Color(0.02, 0.06, 0.2, 1)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 24
+theme_override_styles/normal = SubResource("StyleSummonNormal")
+theme_override_styles/pressed = SubResource("StyleSummonPressed")
+theme_override_styles/hover = SubResource("StyleSummonHover")
+theme_override_styles/disabled = SubResource("StyleSummonDisabled")
+text = "占卜"
+
 [node name="DivinationTargetDisplay" type="Control" parent="DivinationHouse" unique_id=196523055]
 anchors_preset = 0
-offset_left = 388.0
-offset_top = 60.0
-offset_right = 596.0
-offset_bottom = 108.0
+offset_left = 225.0
+offset_top = 273.0
+offset_right = 395.0
+offset_bottom = 488.0
 mouse_filter = 2
 script = ExtResource("2_target")
 
+[node name="DivinationEventHighlight" type="Control" parent="DivinationHouse" unique_id=356304176]
+visible = false
+anchors_preset = 0
+offset_right = 620.0
+offset_bottom = 620.0
+mouse_filter = 2
+script = ExtResource("10_highlight")
+
 [node name="EventIconCard" type="Label" parent="DivinationHouse" unique_id=745687067]
+visible = false
 layout_mode = 0
 offset_left = 290.0
 offset_top = 105.0
@@ -97,6 +314,7 @@ horizontal_alignment = 1
 vertical_alignment = 1
 
 [node name="EventIconBarracks" type="Label" parent="DivinationHouse" unique_id=1439940363]
+visible = false
 layout_mode = 0
 offset_left = 327.0
 offset_top = 146.0
@@ -111,6 +329,7 @@ horizontal_alignment = 1
 vertical_alignment = 1
 
 [node name="EventIconLoss" type="Label" parent="DivinationHouse" unique_id=970810495]
+visible = false
 layout_mode = 0
 offset_left = 327.0
 offset_top = 189.0
@@ -125,6 +344,7 @@ horizontal_alignment = 1
 vertical_alignment = 1
 
 [node name="EventIconGold" type="Label" parent="DivinationHouse" unique_id=1074750810]
+visible = false
 layout_mode = 0
 offset_left = 290.0
 offset_top = 231.0
@@ -139,6 +359,7 @@ horizontal_alignment = 1
 vertical_alignment = 1
 
 [node name="EventIconRise" type="Label" parent="DivinationHouse" unique_id=1606490737]
+visible = false
 layout_mode = 0
 offset_left = 253.0
 offset_top = 189.0
@@ -153,6 +374,7 @@ horizontal_alignment = 1
 vertical_alignment = 1
 
 [node name="EventIconFall" type="Label" parent="DivinationHouse" unique_id=873207214]
+visible = false
 layout_mode = 0
 offset_left = 253.0
 offset_top = 146.0
@@ -167,6 +389,7 @@ horizontal_alignment = 1
 vertical_alignment = 1
 
 [node name="DivinationEventLabel" type="Label" parent="DivinationHouse" unique_id=1198082202]
+visible = false
 layout_mode = 0
 offset_left = 24.0
 offset_top = 328.0

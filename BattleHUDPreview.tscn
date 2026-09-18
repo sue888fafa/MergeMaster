@@ -366,7 +366,7 @@ theme_override_colors/font_color = Color(1, 1, 1, 1)
 theme_override_colors/font_outline_color = Color(0, 0, 0, 0.85)
 theme_override_constants/outline_size = 3
 theme_override_font_sizes/font_size = 12
-text = "玩家"
+text = "Helios"
 horizontal_alignment = 1
 
 [node name="TileIcon" type="TextureRect" parent="FactionStatsAuthoring/PlayerCard" unique_id=290382854]
@@ -433,7 +433,7 @@ theme_override_colors/font_color = Color(1, 1, 1, 1)
 theme_override_colors/font_outline_color = Color(0, 0, 0, 0.85)
 theme_override_constants/outline_size = 3
 theme_override_font_sizes/font_size = 12
-text = "红方"
+text = "Mebius"
 horizontal_alignment = 1
 
 [node name="TileIcon" type="TextureRect" parent="FactionStatsAuthoring/RedCard" unique_id=290382860]
@@ -499,7 +499,7 @@ theme_override_colors/font_color = Color(1, 1, 1, 1)
 theme_override_colors/font_outline_color = Color(0, 0, 0, 0.85)
 theme_override_constants/outline_size = 3
 theme_override_font_sizes/font_size = 12
-text = "紫方"
+text = "Vitas"
 horizontal_alignment = 1
 
 [node name="TileIcon" type="TextureRect" parent="FactionStatsAuthoring/PurpleCard" unique_id=290382866]
@@ -567,7 +567,7 @@ theme_override_colors/font_color = Color(1, 1, 1, 1)
 theme_override_colors/font_outline_color = Color(0, 0, 0, 0.85)
 theme_override_constants/outline_size = 3
 theme_override_font_sizes/font_size = 12
-text = "绿方"
+text = "Freya"
 horizontal_alignment = 1
 
 [node name="TileIcon" type="TextureRect" parent="FactionStatsAuthoring/GreenCard" unique_id=290382872]

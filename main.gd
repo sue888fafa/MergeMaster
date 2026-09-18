@@ -165,6 +165,7 @@ var pending_reveals: Dictionary = {}
 var fate_reveal_batches: Dictionary = {}
 var fate_bomb_building_targets: Dictionary = {}
 var bomb_event_states: Dictionary = {}
+var bomb_reveal_policies: Dictionary = {}
 var active_fate_effects: Dictionary = {}
 var bombardment_started := false
 var bombardment_round := 0
@@ -227,6 +228,7 @@ func _ready() -> void:
 	hud.card_event_finished.connect(_on_card_event_finished)
 	hud.card_draw_finished.connect(_on_card_draw_finished)
 	hud.divination_roll_finished.connect(_on_divination_roll_finished)
+	hud.divination_closed.connect(_on_divination_closed)
 	hud.merchant_arrival_finished.connect(_on_merchant_arrival_finished)
 	hud.merchant_item_selected.connect(_on_merchant_item_selected)
 	hud.merchant_dismissed.connect(_on_merchant_dismissed)
@@ -406,7 +408,7 @@ func _nearest_enemy_hq(cell: Vector2i, faction: int, max_distance: float = -1.0)
 	return result
 
 func _faction_display_name(owner: int) -> String:
-	return get_faction_name(owner)
+	return str(Config.FACTION_PLAYER_NAMES.get(owner, get_faction_name(owner)))
 
 func _process(delta: float) -> void:
 	if game_over:
@@ -797,6 +799,7 @@ func restart_game() -> void:
 	hud.clear_hint_history()
 	hud.hide_intelligence_news()
 	hud.reset_cat_companion()
+	hud.show_cat_companion()
 	for unit in units.duplicate():
 		if is_instance_valid(unit):
 			unit.queue_free()
@@ -859,6 +862,7 @@ func restart_game() -> void:
 	pending_divination_reveal_effects.clear()
 	pending_chest_rewards.clear()
 	bomb_event_states.clear()
+	bomb_reveal_policies.clear()
 	divination_camera_active.clear()
 	board.clear_card_land_loss_cell()
 	board.intelligence_building_drop_animations.clear()
@@ -873,6 +877,7 @@ func restart_game() -> void:
 	fate_reveal_batches.clear()
 	fate_bomb_building_targets.clear()
 	bomb_event_states.clear()
+	bomb_reveal_policies.clear()
 	active_fate_effects.clear()
 	bombardment_started = false
 	bombardment_round = 0
@@ -1222,6 +1227,7 @@ func _reveal_free_tile(owner: int, cell: Vector2i, allow_fate := false, fate_ori
 	if bool(tile["revealed"]):
 		return false
 	var result := _roll_tile_result(tile)
+	result = _apply_bomb_reveal_policy(result, fate_origin)
 	var fate_tile := _is_fate_tile(cell)
 	if not board.start_tile_reveal(cell):
 		return false
@@ -1588,9 +1594,10 @@ func _present_divination_result(pending: Dictionary, result: Dictionary, player_
 	var event_type := int(pending.get("event_type", Config.FATE_DIVINATION_GAIN_CARD))
 	var result_message := _divination_result_message(diviner, target, event_type, result)
 	if hud != null and not game_over:
-		hud.show_world_broadcast(result_message, Config.FATE_DIVINATION_BROADCAST_DURATION)
+		var event_description := _divination_event_description(target, event_type, result)
+		hud.show_divination_broadcast(diviner, str(Config.FACTION_PLAYER_NAMES.get(diviner, "未知")), target, str(Config.FACTION_PLAYER_NAMES.get(target, "未知")), event_description, Config.FATE_DIVINATION_BROADCAST_DURATION)
 		if player_visible:
-			hud.show_divination_result(result_message if bool(result.get("success", false)) else "本次占卜未产生效果。")
+			hud.show_divination_result(_divination_event_description(target, event_type, result))
 	var target_cell: Vector2i = result.get("target_cell", INVALID_CELL)
 	if not bool(result.get("success", false)) or not board.has_cell(target_cell):
 		if not player_visible:
@@ -1661,6 +1668,17 @@ func _on_divination_roll_finished(fate_cell: Vector2i) -> void:
 	var result := _resolve_divination_event(int(pending["owner"]), int(pending["target"]), int(pending["event_type"]))
 	_present_divination_result(pending, result, true)
 
+func _on_divination_closed(fate_cell: Vector2i) -> void:
+	if not pending_divinations.has(fate_cell):
+		return
+	var pending: Dictionary = pending_divinations[fate_cell]
+	pending_divinations.erase(fate_cell)
+	if int(pending.get("owner", AI)) == PLAYER:
+		_end_event_presentation_lock()
+	_finish_fate_event(fate_cell, true)
+	_refresh_purchase_cells()
+	board.queue_redraw()
+
 func _on_divination_barracks_warning_finished(cell: Vector2i) -> void:
 	for fate_cell in pending_divinations.keys():
 		var pending: Dictionary = pending_divinations[fate_cell]
@@ -1707,6 +1725,24 @@ func _divination_result_message(diviner: int, target: int, event_type: int, resu
 		Config.FATE_DIVINATION_DOWNGRADE_BARRACKS:
 			return prefix + "%s降级了一座兵营" % target_name
 	return prefix + "本次占卜未产生效果。"
+
+func _divination_event_description(target: int, event_type: int, result: Dictionary) -> String:
+	if not bool(result.get("success", false)):
+		return "本次占卜未产生效果。"
+	match event_type:
+		Config.FATE_DIVINATION_GAIN_CARD:
+			return "获得了%s。" % MerchantDataScript.get_item_name(str(result.get("card_id", "")))
+		Config.FATE_DIVINATION_GAIN_BARRACKS:
+			return "获得了一座1级兵营。"
+		Config.FATE_DIVINATION_LOSE_BARRACKS:
+			return "丢失了一座1级兵营。"
+		Config.FATE_DIVINATION_GAIN_GOLD:
+			return "获得了5个金币。"
+		Config.FATE_DIVINATION_UPGRADE_BARRACKS:
+			return "升级了一座兵营。"
+		Config.FATE_DIVINATION_DOWNGRADE_BARRACKS:
+			return "降级了一座兵营。"
+	return "本次占卜未产生效果。"
 
 func _play_gold_popup(owner: int, amount: int) -> void:
 	var hq_cell: Vector2i = get_hq_cell(owner)
@@ -2372,6 +2408,15 @@ func _on_fate_effect_finished(effect: Node2D, event_type: int, owner: int, origi
 	var pending_cells: Array[Vector2i] = []
 	match event_type:
 		Config.RANDOM_EVENT_BOMB:
+			var has_divination_target := false
+			for cell in locked_cells:
+				if _is_fate_tile(cell):
+					has_divination_target = true
+					break
+			bomb_reveal_policies[origin] = {
+				"has_divination_target": has_divination_target,
+				"merchant_created": false
+			}
 			for building_cell in fate_bomb_building_targets.get(origin, []):
 				_damage_bomb_building(building_cell, owner == PLAYER)
 			fate_bomb_building_targets.erase(origin)
@@ -2395,6 +2440,7 @@ func _on_fate_effect_finished(effect: Node2D, event_type: int, owner: int, origi
 		_release_fate_locks(origin, locked_cells)
 		if event_type == Config.RANDOM_EVENT_BOMB:
 			bomb_event_states.erase(origin)
+			bomb_reveal_policies.erase(origin)
 		_finish_fate_event(origin)
 	else:
 		fate_reveal_batches[origin] = {
@@ -2448,6 +2494,7 @@ func _resolve_fate_reveal(origin: Vector2i, cell: Vector2i) -> void:
 	fate_reveal_batches.erase(origin)
 	if bomb_event_states.has(origin):
 		bomb_event_states.erase(origin)
+	bomb_reveal_policies.erase(origin)
 	_finish_fate_event(origin)
 
 func _release_fate_locks(origin: Vector2i, cells: Array[Vector2i]) -> void:
@@ -2496,6 +2543,24 @@ func _roll_tile_result(tile: Dictionary) -> Dictionary:
 		Config.VISIBLE_TILE_TYPE:
 			return _roll_visible_tile_result(tile)
 	return {"building": BARRACKS, "level": 1, "unit_class": _random_unit_class()}
+
+func _apply_bomb_reveal_policy(result: Dictionary, fate_origin: Vector2i) -> Dictionary:
+	if fate_origin == INVALID_CELL or not bomb_reveal_policies.has(fate_origin):
+		return result
+	if int(result.get("building", EMPTY)) != MERCHANT:
+		return result
+	var policy: Dictionary = bomb_reveal_policies[fate_origin]
+	if bool(policy.get("has_divination_target", false)) or bool(policy.get("merchant_created", false)):
+		# Suppressed merchants become ordinary empty revealed tiles. This keeps
+		# the bomb batch from opening overlapping shop UI or creating a second
+		# merchant while preserving the rest of the reveal batch.
+		result["building"] = EMPTY
+		result["level"] = 0
+		result["unit_class"] = -1
+		return result
+	policy["merchant_created"] = true
+	bomb_reveal_policies[fate_origin] = policy
+	return result
 
 func _roll_question_tile_result(_tile: Dictionary) -> Dictionary:
 	var roll := rng.randf()
@@ -2693,7 +2758,9 @@ func _on_merchant_dismissed() -> void:
 	_update_hud()
 
 func _on_inventory_item_dropped(item_id: String, screen_position: Vector2) -> void:
-	if game_over or not MerchantDataScript.is_card(item_id) or not item_inventory.has(item_id):
+	if game_over or player_defeated or not MerchantDataScript.is_card(item_id) or not item_inventory.has(item_id):
+		if player_defeated:
+			_clear_active_item("你的主城已阵亡，无法使用卡片。")
 		return
 	var canvas_world := get_viewport().get_canvas_transform().affine_inverse() * screen_position
 	var board_position := board.to_local(canvas_world)
@@ -2710,8 +2777,10 @@ func _on_inventory_item_dropped(item_id: String, screen_position: Vector2) -> vo
 		_clear_active_item()
 
 func _on_inventory_item_dragged(item_id: String, screen_position: Vector2) -> void:
-	if game_over or not MerchantDataScript.is_card(item_id) or not item_inventory.has(item_id):
+	if game_over or player_defeated or not MerchantDataScript.is_card(item_id) or not item_inventory.has(item_id):
 		board.clear_card_drag_target()
+		if player_defeated:
+			_clear_active_item()
 		return
 	if active_item_id.is_empty():
 		active_item_id = item_id
@@ -2721,16 +2790,20 @@ func _on_inventory_item_dragged(item_id: String, screen_position: Vector2) -> vo
 	if not board.has_cell(target_cell):
 		board.clear_card_drag_target()
 		return
-	board.set_card_drag_target(target_cell, _is_card_target_valid(item_id, target_cell))
+	var range_radius := Config.MERCHANT_STORM_RADIUS if item_id == MerchantDataScript.ITEM_BLIZZARD else 0
+	board.set_card_drag_target(target_cell, _is_card_target_valid(item_id, target_cell), range_radius)
 
 func _on_inventory_item_drag_ended(item_id: String, screen_position: Vector2, was_dragged: bool) -> void:
 	board.clear_card_drag_target()
 	if not was_dragged:
 		return
+	if hud != null and hud.is_screen_point_over_card_cancel_area(screen_position):
+		_clear_active_item("卡片取消使用")
+		return
 	_on_inventory_item_dropped(item_id, screen_position)
 
 func _is_card_target_valid(item_id: String, target_cell: Vector2i) -> bool:
-	if not board.has_cell(target_cell) or is_bombardment_locked(target_cell) or _is_card_land_loss_locked(target_cell) or _is_reveal_locked(target_cell):
+	if player_defeated or not board.has_cell(target_cell) or is_bombardment_locked(target_cell) or _is_card_land_loss_locked(target_cell) or _is_reveal_locked(target_cell):
 		return false
 	var tile: Dictionary = board.tiles[target_cell]
 	if MerchantDataScript.is_sealed_barracks_card(item_id):
@@ -2764,6 +2837,9 @@ func _is_card_target_valid(item_id: String, target_cell: Vector2i) -> bool:
 
 func _try_use_active_item(target_cell: Vector2i) -> void:
 	if active_item_id.is_empty():
+		return
+	if player_defeated:
+		_clear_active_item("你的主城已阵亡，无法使用卡片。")
 		return
 	var inventory_item := active_item_cell == INVALID_CELL
 	if inventory_item:
@@ -3072,42 +3148,54 @@ func _count_barracks_units(cell: Vector2i, owner: int) -> int:
 		count += 1
 	return count
 
-func get_barracks_garrison_position(cell: Vector2i, unit: Node = null) -> Vector2:
-	# Keep soldiers around the barracks door instead of stacking them at one
-	# point. The presets are centered and symmetric to remain readable at tile
-	# scale while still supporting the temporary extra soldier from merging.
-	var residents: Array = []
+func _get_barracks_garrison_slot_offsets() -> Array[Vector2]:
+	var offsets: Array[Vector2] = []
+	for raw_offset in Config.BARRACKS_GARRISON_SLOT_OFFSETS:
+		offsets.append(Vector2(raw_offset))
+	return offsets
+
+func _allocate_barracks_garrison_slot(cell: Vector2i, unit: BattleUnit) -> int:
+	if not is_instance_valid(unit) or not board.has_cell(cell):
+		return -1
+	var occupied: Dictionary = {}
 	for candidate in units_by_home.get(cell, []):
-		if is_instance_valid(candidate) and candidate.home_cell == cell and not candidate.dispatched:
-			residents.append(candidate)
-	if unit != null and not residents.has(unit):
-		residents.append(unit)
-	var resident_index := residents.find(unit)
-	if resident_index < 0:
-		resident_index = residents.size()
-	var count := residents.size()
+		if not is_instance_valid(candidate) or candidate == unit:
+			continue
+		if candidate.home_cell != cell or candidate.garrison_slot < 0:
+			continue
+		occupied[int(candidate.garrison_slot)] = true
+	for slot_index in range(_get_barracks_garrison_slot_offsets().size()):
+		if not occupied.has(slot_index):
+			return slot_index
+	return -1
+
+func _release_barracks_garrison_slot(unit: BattleUnit) -> void:
+	if is_instance_valid(unit):
+		unit.garrison_slot = -1
+
+func get_barracks_garrison_position(cell: Vector2i, unit: Node = null) -> Vector2:
 	var offset := Config.BARRACKS_GARRISON_OFFSET
-	match count:
-		1:
-			offset += Vector2(0.0, 0.0)
-		2:
-			offset += Vector2(-14.0 if resident_index == 0 else 14.0, 0.0)
-		3:
-			var three_offsets := [Vector2(-18.0, 4.0), Vector2(0.0, -7.0), Vector2(18.0, 4.0)]
-			offset += three_offsets[mini(resident_index, three_offsets.size() - 1)]
-		_:
-			var row := resident_index / 2
-			var column := resident_index % 2
-			offset += Vector2(-15.0 if column == 0 else 15.0, float(row) * 13.0 - 6.5)
+	var slot_index := int(unit.get("garrison_slot")) if unit != null else -1
+	var offsets := _get_barracks_garrison_slot_offsets()
+	if slot_index < 0 and unit != null and unit.has_method("_allocate_garrison_slot"):
+		unit.call("_allocate_garrison_slot")
+		slot_index = int(unit.get("garrison_slot"))
+	if slot_index >= 0 and slot_index < offsets.size():
+		offset += offsets[slot_index]
 	return board.axial_to_world(cell) + offset
 
 func _reassign_barracks_units(from_cell: Vector2i, to_cell: Vector2i) -> void:
 	for unit in units:
 		if not is_instance_valid(unit) or unit.home_cell != from_cell:
 			continue
+		var was_garrisoned := bool(unit.garrisoned) and not bool(unit.dispatched)
+		if was_garrisoned:
+			_release_barracks_garrison_slot(unit)
 		unit.home_cell = to_cell
 		on_unit_home_changed(unit, from_cell, to_cell)
 		unit.destination = to_cell
+		if was_garrisoned:
+			unit.call("_allocate_garrison_slot")
 
 func _reset_barracks_production_timer(cell: Vector2i) -> void:
 	if not board.has_cell(cell) or int(board.tiles[cell].get("building", EMPTY)) != BARRACKS:
@@ -3212,20 +3300,29 @@ func process_unit(unit: BattleUnit, delta: float) -> void:
 		return
 	unit.combat_target_refresh_timer -= delta
 	unit.monster_interrupt_timer -= delta
+	var was_locked_monster := is_instance_valid(unit.monster_target)
+	var allow_global_retarget := false
 	var target: Dictionary = _locked_monster_target(unit)
 	if target.is_empty():
 		target = unit.combat_target
 		var target_invalid := not target.is_empty() and not _is_combat_target_valid(unit, target)
 		var locked_pvp_target := not target.is_empty() and str(target.get("kind", "")) != "monster"
 		if target_invalid:
-			# A lost target ends the current field assignment. Dispatched soldiers
-			# return home instead of immediately switching to another target.
+			var lost_target_kind := str(target.get("kind", ""))
 			unit.invalidate_combat_target()
 			unit.clear_monster_target()
 			target = {}
-			if unit.dispatched:
+			if unit.dispatched and (lost_target_kind == "monster" or was_locked_monster):
 				unit.begin_return_home()
 				return
+			if unit.dispatched and lost_target_kind != "monster":
+				# A dispatched soldier keeps fighting in the field after a PvP
+				# target disappears. It searches globally instead of returning to
+				# the barracks or being limited by the barracks dispatch radius.
+				allow_global_retarget = true
+				target = _retarget_dispatched_unit(unit)
+				unit.combat_target = target
+				unit.combat_target_refresh_timer = Config.UNIT_TARGET_REFRESH_INTERVAL
 		# PvP targets are hard-locked until they disappear or become invalid. The
 		# refresh timer is only used while idle or while tracking a wild monster.
 		# This prevents a soldier from switching between enemy units/buildings
@@ -3267,8 +3364,16 @@ func process_unit(unit: BattleUnit, delta: float) -> void:
 				target = higher_priority_target
 				target["distance"] = float(board.cube_distance(unit.cell, target.get("cell", unit.cell)))
 	if target.is_empty() and unit.dispatched and not unit.returning_home:
-		unit.begin_return_home()
-		return
+		# A dispatched soldier may have lost a PvP target or may simply be
+		# waiting for a target to appear. Retry global field search periodically;
+		# only a lost wild-monster target enters the return-home branch above.
+		if allow_global_retarget or unit.combat_target_refresh_timer <= 0.0:
+			allow_global_retarget = true
+			target = _retarget_dispatched_unit(unit)
+			unit.combat_target = target
+			unit.combat_target_refresh_timer = Config.UNIT_TARGET_REFRESH_INTERVAL
+		if target.is_empty():
+			return
 	if unit.returning_home:
 		if target.is_empty():
 			if board.has_cell(unit.home_cell):
@@ -3360,8 +3465,9 @@ func process_unit(unit: BattleUnit, delta: float) -> void:
 					return
 				unit.move_directly_to(board.axial_to_world(enemy_hq), delta)
 		return
-	# A dispatched unit with no valid target has already started returning home
-	# above; it will be garrisoned again when it reaches its barracks.
+	# A dispatched unit with no valid target remains in the field and retries
+	# global search on later ticks. Wild-monster target loss is handled by the
+	# return-home branch above.
 
 func _is_valid_barracks_home(unit: BattleUnit) -> bool:
 	if not board.has_cell(unit.home_cell):
@@ -3403,9 +3509,9 @@ func _is_better_combat_candidate(distance: float, group: int, priority: int, bes
 		return distance < best_distance
 	return priority < best_priority
 
-func _nearest_combat_target(cell: Vector2i, faction: int, max_distance: float, include_monsters: bool = true) -> Dictionary:
+func _nearest_combat_target(cell: Vector2i, faction: int, max_distance: float, include_monsters: bool = true, ignore_pvp_type_priority: bool = false) -> Dictionary:
 	var result: Dictionary = {}
-	var cache_key := "%d:%d:%d:%d:%d" % [cell.x, cell.y, faction, roundi(max_distance * 10.0), int(include_monsters)]
+	var cache_key := "%d:%d:%d:%d:%d:%d" % [cell.x, cell.y, faction, roundi(max_distance * 10.0), int(include_monsters), int(ignore_pvp_type_priority)]
 	var cached: Dictionary = combat_search_cache.get(cache_key, {})
 	if not cached.is_empty() and float(cached.get("expires", -1.0)) > elapsed:
 		var cached_result: Dictionary = cached.get("result", {})
@@ -3434,10 +3540,11 @@ func _nearest_combat_target(cell: Vector2i, faction: int, max_distance: float, i
 			var building: int = int(tile["building"])
 			if bool(tile["revealed"]) and is_enemy(owner, faction) and not is_bombardment_locked(nearby_cell) and _is_combat_building(building):
 				var building_distance := float(board.cube_distance(cell, nearby_cell))
-				if building_distance <= max_distance and _is_better_combat_candidate(building_distance, 0, 1, best_distance, best_group, best_priority):
+				var building_priority := 0 if ignore_pvp_type_priority else 1
+				if building_distance <= max_distance and _is_better_combat_candidate(building_distance, 0, building_priority, best_distance, best_group, best_priority):
 					best_distance = building_distance
 					best_group = 0
-					best_priority = 1
+					best_priority = building_priority
 					result = {"kind": "building", "cell": nearby_cell, "owner": owner, "distance": building_distance}
 			if include_monsters:
 				for monster in monsters_by_cell.get(nearby_cell, []):
@@ -3475,10 +3582,11 @@ func _nearest_combat_target(cell: Vector2i, faction: int, max_distance: float, i
 			var building: int = int(tile["building"])
 			if bool(tile["revealed"]) and is_enemy(owner, faction) and not is_bombardment_locked(nearby_cell) and _is_combat_building(building):
 				var building_distance := float(board.cube_distance(cell, nearby_cell))
-				if building_distance <= max_distance and _is_better_combat_candidate(building_distance, 0, 1, best_distance, best_group, best_priority):
+				var building_priority := 0 if ignore_pvp_type_priority else 1
+				if building_distance <= max_distance and _is_better_combat_candidate(building_distance, 0, building_priority, best_distance, best_group, best_priority):
 					best_distance = building_distance
 					best_group = 0
-					best_priority = 1
+					best_priority = building_priority
 					result = {"kind": "building", "cell": nearby_cell, "owner": owner, "distance": building_distance}
 		if include_monsters:
 			for raw_monster in active_monsters.keys():
@@ -3505,10 +3613,11 @@ func _nearest_combat_target(cell: Vector2i, faction: int, max_distance: float, i
 		if is_hq_destroyed(enemy_hq):
 			continue
 		var hq_distance := float(board.cube_distance(cell, enemy_hq))
-		if hq_distance <= max_distance and _is_better_combat_candidate(hq_distance, 0, 2, best_distance, best_group, best_priority):
+		var hq_priority := 0 if ignore_pvp_type_priority else 2
+		if hq_distance <= max_distance and _is_better_combat_candidate(hq_distance, 0, hq_priority, best_distance, best_group, best_priority):
 			best_distance = hq_distance
 			best_group = 0
-			best_priority = 2
+			best_priority = hq_priority
 			result = {"kind": "hq", "cell": enemy_hq, "owner": owner, "distance": hq_distance}
 	# Units sharing a cell and search parameters reuse the result briefly. The
 	# target validity check above still invalidates entries when a unit, building,
@@ -3546,6 +3655,23 @@ func _is_cached_combat_target_valid(cell: Vector2i, faction: int, max_distance: 
 			var hq_owner := int(target.get("owner", EMPTY))
 			return is_valid_faction(hq_owner) and hq_owner != faction and not eliminated_factions.get(hq_owner, false) and not is_hq_destroyed(hq_cell) and board.cube_distance(cell, hq_cell) <= max_distance
 	return false
+
+func _retarget_dispatched_unit(unit: BattleUnit) -> Dictionary:
+	if not is_instance_valid(unit):
+		return {}
+	var global_range := float(Config.BOARD_RADIUS * 2)
+	var pvp_target := _nearest_combat_target(unit.cell, unit.faction, global_range, false, true)
+	if not pvp_target.is_empty():
+		return pvp_target
+	# If this faction is the only surviving faction, let the normal match
+	# result flow declare victory. Do not make field soldiers hunt monsters
+	# after PvP has already ended.
+	if get_active_faction_ids().size() <= 1:
+		_check_faction_survival()
+		return {}
+	# With other factions still alive but no currently valid PvP target, a
+	# dispatched soldier may fall back to the nearest eligible wild monster.
+	return _nearest_combat_target(unit.cell, unit.faction, global_range, true, false)
 
 func _locked_monster_target(unit: BattleUnit) -> Dictionary:
 	var monster = unit.monster_target
@@ -4073,6 +4199,8 @@ func _eliminate_faction(owner: int, hq_capture_owner: int = EMPTY) -> void:
 		var was_defeated := player_defeated
 		player_defeated = true
 		spectator_mode = false
+		hud.hide_cat_companion()
+		match_end_pending = get_active_faction_ids().size() <= 1 or elapsed >= match_duration
 		last_message = "你的阵营已被淘汰。"
 		if not was_defeated and not game_over:
 			hud.show_player_defeat_choice("失败\n你的所有地块都已失守")
@@ -4081,15 +4209,21 @@ func _eliminate_faction(owner: int, hq_capture_owner: int = EMPTY) -> void:
 func _check_faction_survival() -> void:
 	if game_over:
 		return
+	var active := get_active_faction_ids()
 	# Let the defeated player choose between restarting and watching before a
 	# remaining AI faction can close the entire match.
 	if player_defeated and not spectator_mode:
-		match_end_pending = true
+		# Being defeated alone is not a match-ending condition. Only remember a
+		# pending end when the player's elimination also leaves zero or one active
+		# faction; otherwise the spectator choice must resume the battle.
+		match_end_pending = active.size() <= 1
 		return
-	var active := get_active_faction_ids()
-	if active.size() != 1:
+	if active.size() > 1:
 		return
 	match_end_pending = false
+	if active.is_empty():
+		_end_game("平局\n所有阵营同时被淘汰")
+		return
 	var winner := active[0]
 	if winner == PLAYER:
 		_end_game("胜利\n你是最后存活的势力")
@@ -4099,9 +4233,9 @@ func _check_faction_survival() -> void:
 func _check_time_limit() -> void:
 	if game_over or elapsed < match_duration:
 		return
-	if player_defeated and not spectator_mode:
-		match_end_pending = true
-		return
+	# The match duration is a hard stop. Even if the player has been
+	# eliminated and has not chosen a spectator option yet, the battle must
+	# stop and the final settlement must be shown at the time limit.
 	match_end_pending = false
 	var best_owner := EMPTY
 	var best_tiles := -1
@@ -4148,16 +4282,13 @@ func _get_settlement_rows() -> Array:
 		if not is_equal_approx(a_survival, b_survival):
 			return a_survival > b_survival
 		return int(a.get("faction", 0)) < int(b.get("faction", 0)))
-	var previous_tiles := -1
-	var previous_rank := 0
 	for index in range(actual_rows.size()):
 		var row: Dictionary = actual_rows[index]
-		var tiles := int(row.get("territories", 0))
-		if index == 0 or tiles != previous_tiles:
-			previous_rank = index + 1
-		row["rank"] = previous_rank
+		# Every faction receives a unique rank. Territory count is the primary
+		# key, and survival time breaks ties so equal territory never creates a
+		# shared placement.
+		row["rank"] = index + 1
 		actual_rows[index] = row
-		previous_tiles = tiles
 	while actual_rows.size() < 6:
 		actual_rows.append({
 			"rank": 0,
@@ -4222,6 +4353,7 @@ func _end_game(_message: String) -> void:
 	pending_divination_reveal_effects.clear()
 	pending_chest_rewards.clear()
 	bomb_event_states.clear()
+	bomb_reveal_policies.clear()
 	divination_camera_active.clear()
 	board.clear_card_land_loss_cell()
 	board.intelligence_building_drop_animations.clear()
@@ -4241,14 +4373,14 @@ func _end_game(_message: String) -> void:
 func continue_spectating() -> void:
 	if game_over or not player_defeated:
 		return
-	var should_finish_match := match_end_pending
 	spectator_mode = true
+	match_end_pending = false
 	hud.hide_result()
 	hud.show_spectator_exit()
-	if should_finish_match:
-		_end_game("比赛结束")
-	else:
-		_check_faction_survival()
+	# Re-evaluate the real active-faction count after switching modes. If more
+	# than one faction remains, the match continues normally until its actual
+	# end condition is reached.
+	_check_faction_survival()
 
 func _clear_effect_children(effect_layer) -> void:
 	if not is_instance_valid(effect_layer):

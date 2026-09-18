@@ -20,6 +20,7 @@ var coin_mode := false
 func setup_card(value: String) -> void:
 	card_id = value
 	coin_mode = false
+	visible = true
 	queue_redraw()
 
 func setup_coin() -> void:

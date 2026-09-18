@@ -13,6 +13,7 @@ const MerchantShopArtScript := preload("res://merchant_shop_art.gd")
 const MerchantShopUIScript := preload("res://merchant_shop_ui.gd")
 const DivinationHouseArtScript := preload("res://divination_house_art.gd")
 const DivinationTargetDisplayScript := preload("res://divination_target_display.gd")
+const DivinationCrystalEffectScript := preload("res://divination_crystal_effect.gd")
 const FactionStatsDisplayScript := preload("res://faction_stats_display.gd")
 const FactionAvatarScript := preload("res://faction_avatar.gd")
 const SettlementUIScript := preload("res://settlement_ui.gd")
@@ -21,6 +22,7 @@ const CASTLE_INFO_ICON := preload("res://assets/generated/ui/castle_info.png")
 const BARRACKS_ICON := preload("res://assets/generated/ui/barracks_icon.png")
 const SOLDIER_ICON := preload("res://assets/generated/ui/soldier_icon.png")
 const BATTLE_HUD_PREVIEW_SCENE := preload("res://BattleHUDPreview.tscn")
+const DIVINATION_EVENT_COUNT := 6
 
 @export_category("UI编辑")
 @export var ui_config: UIEditorConfig = preload("res://ui_editor_config.tres")
@@ -28,6 +30,7 @@ const BATTLE_HUD_PREVIEW_SCENE := preload("res://BattleHUDPreview.tscn")
 signal card_event_finished(owner: int, card_type: int, fate_cell: Vector2i)
 signal card_draw_finished(owner: int, card_id: String, fate_cell: Vector2i)
 signal divination_roll_finished(fate_cell: Vector2i)
+signal divination_closed(fate_cell: Vector2i)
 signal merchant_arrival_finished(cell: Vector2i)
 signal merchant_item_selected(index: int)
 signal merchant_dismissed
@@ -64,15 +67,22 @@ var card_hint_tween: Tween
 var bombardment_banner: ColorRect
 var bombardment_banner_label: Label
 var broadcast_faction_avatar: Control
+var broadcast_target_avatar: Control
+var broadcast_target_label: Label
 var bombardment_banner_message := ""
 var world_broadcast_message := ""
 var world_broadcast_remaining := 0.0
 var world_broadcast_faction := -1
+var world_broadcast_name := ""
+var world_broadcast_target_faction := -1
+var world_broadcast_target_name := ""
 var cat_companion: CatCompanion
 var end_panel: Panel
 var end_label: Label
 var restart_button: Button
 var spectate_button: Button
+var exit_game_button: Button
+var defeat_overlay: Control
 var watch_mode_button: Button
 var settlement_ui: Control
 var player_info_button: Button
@@ -109,10 +119,19 @@ var divination_root: Control
 var divination_panel: Panel
 var divination_title: Label
 var divination_target: Label
+var divination_target_text: Label
 var divination_target_display: DivinationTargetDisplay
 var divination_event_label: Label
+var divination_event_text: Label
 var divination_result: Label
+var divination_event_object: TextureRect
+var divination_crystal_effect: DivinationCrystalEffect
+var divination_desktop_event_icons: Control
+var divination_start_button: Button
+var divination_bubble: TextureRect
+var divination_close_button: TextureButton
 var divination_event_icons: Array[Label] = []
+var divination_event_highlight: DivinationEventHighlight
 var divination_house_art: Control
 var intelligence_news_queue: Array[Dictionary] = []
 var intelligence_news_current: Dictionary = {}
@@ -204,6 +223,9 @@ func _process(delta: float) -> void:
 		if world_broadcast_remaining <= 0.0:
 			world_broadcast_message = ""
 			world_broadcast_faction = -1
+			world_broadcast_name = ""
+			world_broadcast_target_faction = -1
+			world_broadcast_target_name = ""
 			_refresh_broadcast_banner()
 	camera_guide_refresh_timer -= delta
 	if camera_guide_refresh_timer <= 0.0:
@@ -396,6 +418,19 @@ func _build_ui() -> void:
 	broadcast_faction_avatar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	broadcast_faction_avatar.visible = false
 	bombardment_banner.add_child(broadcast_faction_avatar)
+	broadcast_target_avatar = FactionAvatarScript.new()
+	broadcast_target_avatar.name = "BroadcastTargetAvatar"
+	broadcast_target_avatar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	broadcast_target_avatar.visible = false
+	bombardment_banner.add_child(broadcast_target_avatar)
+	broadcast_target_label = Label.new()
+	broadcast_target_label.name = "BroadcastTargetLabel"
+	broadcast_target_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	broadcast_target_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	broadcast_target_label.add_theme_font_size_override("font_size", 19)
+	broadcast_target_label.add_theme_color_override("font_color", Color("#fee2e2"))
+	broadcast_target_label.visible = false
+	bombardment_banner.add_child(broadcast_target_label)
 
 	building_damage_edge_soft = Panel.new()
 	building_damage_edge_soft.name = "BuildingDamageEdgeSoftFlash"
@@ -448,14 +483,22 @@ func _build_ui() -> void:
 	var defeat_ui: Control = defeat_scene.instantiate()
 	defeat_ui.name = "DefeatOverlay"
 	defeat_ui.visible = false
+	defeat_ui.z_index = 120
 	add_child(defeat_ui)
-	end_panel = defeat_ui.get_node("DefeatPanel") as Panel
-	end_panel.add_theme_stylebox_override("panel", Art.flat_panel_style(Art.POPUP_BACKGROUND_ALT, Art.POPUP_ACCENT))
-	end_label = defeat_ui.get_node("DefeatPanel/Message") as Label
-	restart_button = defeat_ui.get_node("DefeatPanel/RestartButton") as Button
-	spectate_button = defeat_ui.get_node("DefeatPanel/SpectateButton") as Button
-	restart_button.pressed.connect(_on_restart_pressed)
-	spectate_button.pressed.connect(_on_spectate_pressed)
+	defeat_overlay = defeat_ui
+	end_panel = defeat_ui.get_node_or_null(NodePath("DefeatPanel")) as Panel
+	if end_panel != null:
+		end_panel.add_theme_stylebox_override("panel", Art.flat_panel_style(Art.POPUP_BACKGROUND_ALT, Art.POPUP_ACCENT))
+	end_label = defeat_ui.get_node_or_null(NodePath("DefeatPanel/Message")) as Label
+	restart_button = defeat_ui.get_node_or_null(NodePath("DefeatPanel/RestartButton")) as Button
+	spectate_button = defeat_ui.get_node_or_null(NodePath("DefeatPanel/SpectateButton")) as Button
+	exit_game_button = defeat_ui.get_node_or_null(NodePath("DefeatPanel/ExitGameButton")) as Button
+	if restart_button != null:
+		restart_button.pressed.connect(_on_restart_pressed)
+	if spectate_button != null:
+		spectate_button.pressed.connect(_on_spectate_pressed)
+	if exit_game_button != null:
+		exit_game_button.pressed.connect(_on_defeat_exit_pressed)
 
 	watch_mode_button = Button.new()
 	watch_mode_button.name = "WatchModeExitButton"
@@ -480,7 +523,7 @@ func _build_ui() -> void:
 	settlement_ui = SettlementUIScript.new()
 	settlement_ui.name = "SettlementUI"
 	settlement_ui.visible = false
-	settlement_ui.z_index = 100
+	settlement_ui.z_index = 200
 	add_child(settlement_ui)
 	settlement_ui.call("configure_ui", ui_config)
 	settlement_ui.connect("confirmed", _on_settlement_confirmed)
@@ -556,6 +599,27 @@ func reset_cat_companion() -> void:
 	cat_companion.cancel_item_drag()
 	cat_companion.hide_bubble()
 	cat_companion.set_expanded(false)
+
+func hide_cat_companion() -> void:
+	if cat_companion == null:
+		return
+	cat_companion.cancel_item_drag()
+	cat_companion.hide_bubble()
+	cat_companion.set_expanded(false)
+	cat_companion.visible = false
+
+func is_screen_point_over_card_cancel_area(screen_position: Vector2) -> bool:
+	# The companion contains both the card inventory and the cat itself.  A
+	# dragged card released anywhere in this authored HUD area is considered a
+	# cancellation, rather than being converted into a map cell behind it.
+	if cat_companion == null or not cat_companion.visible:
+		return false
+	return cat_companion.get_global_rect().has_point(screen_position)
+
+func show_cat_companion() -> void:
+	if cat_companion == null:
+		return
+	cat_companion.visible = true
 
 func _build_merchant_shop_panel() -> void:
 	var shop_scene := preload("res://MerchantShopUI.tscn")
@@ -1343,28 +1407,42 @@ func _build_divination_panel() -> void:
 	divination_overlay = divination_ui.get_node("DivinationOverlay") as ColorRect
 	divination_overlay.color = ui_config.modal_overlay_color
 	divination_panel = divination_ui.get_node("DivinationHouse") as Panel
-	divination_panel.add_theme_stylebox_override("panel", Art.flat_panel_style(Art.POPUP_BACKGROUND_ALT, Art.POPUP_ACCENT))
+	# The supplied artwork is the complete visual surface; do not add the
+	# programmatic popup panel background behind it.
+	divination_panel.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 	divination_title = divination_ui.get_node("DivinationHouse/DivinationTitle") as Label
+	divination_title.visible = false
 	divination_target = divination_ui.get_node("DivinationHouse/DivinationTarget") as Label
+	divination_target.visible = false
+	divination_target_text = divination_ui.get_node("DivinationHouse/DivinationTargetText") as Label
 	divination_target_display = divination_ui.get_node("DivinationHouse/DivinationTargetDisplay") as DivinationTargetDisplay
+	divination_target_display.visible = false
 	divination_house_art = divination_ui.get_node("DivinationHouse/DivinationHouseArt") as Control
+	divination_event_object = divination_ui.get_node("DivinationHouse/DivinationEventObject") as TextureRect
+	divination_event_object.visible = false
+	divination_crystal_effect = divination_ui.get_node("DivinationHouse/DivinationCrystalEffect") as DivinationCrystalEffect
+	divination_desktop_event_icons = divination_ui.get_node("DivinationHouse/EventIcons") as Control
+	divination_desktop_event_icons.visible = false
+	divination_start_button = divination_ui.get_node("DivinationHouse/DivinationStartButton") as Button
+	divination_start_button.pressed.connect(_on_divination_start_pressed)
+	divination_bubble = divination_ui.get_node("DivinationHouse/DivinationBubble") as TextureRect
+	divination_close_button = divination_ui.get_node("DivinationHouse/DivinationCloseButton") as TextureButton
+	divination_close_button.pressed.connect(_close_divination_ui)
+	divination_event_text = divination_ui.get_node("DivinationHouse/DivinationEventText") as Label
 	divination_event_icons.clear()
 	for icon_name in ["Card", "Barracks", "Loss", "Gold", "Rise", "Fall"]:
 		divination_event_icons.append(divination_ui.get_node("DivinationHouse/EventIcon%s" % icon_name) as Label)
+	divination_event_highlight = divination_ui.get_node("DivinationHouse/DivinationEventHighlight") as DivinationEventHighlight
+	divination_event_highlight.clear_active()
 	divination_event_label = divination_ui.get_node("DivinationHouse/DivinationEventLabel") as Label
+	divination_event_label.visible = false
 	divination_result = divination_ui.get_node_or_null("DivinationHouse/DivinationResult") as Label
-	if divination_result == null:
-		# Older DivinationUI scenes may not contain the result label. Create the
-		# compatible runtime node so the event flow never writes through null.
-		divination_result = Label.new()
-		divination_result.name = "DivinationResult"
-		divination_result.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		divination_result.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		divination_result.add_theme_font_size_override("font_size", 17)
-		divination_result.add_theme_color_override("font_color", Art.INK_SOFT)
-		divination_result.position = Vector2(24.0, 402.0)
-		divination_result.size = Vector2(572.0, 42.0)
-		divination_panel.add_child(divination_result)
+	# The result is shown only in the second line of the authored bubble.
+	# Keep compatibility with older scenes that still contain this extra label,
+	# but never create or display a separate final-result line.
+	if divination_result != null:
+		divination_result.text = ""
+		divination_result.visible = false
 
 func _build_intelligence_news_panel() -> void:
 	intelligence_news_overlay = ColorRect.new()
@@ -1453,7 +1531,7 @@ func _refresh_broadcast_banner() -> void:
 		return
 	_layout_broadcast_banner_content()
 	if world_broadcast_remaining > 0.0 and not world_broadcast_message.is_empty():
-		bombardment_banner_label.text = world_broadcast_message
+		bombardment_banner_label.text = "%s的占卜：" % world_broadcast_name if world_broadcast_target_faction >= 0 else world_broadcast_message
 		bombardment_banner.visible = true
 	elif not bombardment_banner_message.is_empty():
 		bombardment_banner_label.text = bombardment_banner_message
@@ -1465,16 +1543,31 @@ func _layout_broadcast_banner_content() -> void:
 	if bombardment_banner == null or bombardment_banner_label == null:
 		return
 	var has_avatar := world_broadcast_faction >= 0
+	var is_divination := world_broadcast_target_faction >= 0
 	if broadcast_faction_avatar != null:
 		broadcast_faction_avatar.visible = has_avatar
 		if has_avatar:
 			broadcast_faction_avatar.position = Vector2(9.0, 7.0)
 			broadcast_faction_avatar.size = Vector2(32.0, 32.0)
 			broadcast_faction_avatar.call("setup", world_broadcast_faction)
+	if broadcast_target_avatar != null:
+		broadcast_target_avatar.visible = is_divination
+		if is_divination:
+			broadcast_target_avatar.position = Vector2(205.0, 7.0)
+			broadcast_target_avatar.size = Vector2(32.0, 32.0)
+			broadcast_target_avatar.call("setup", world_broadcast_target_faction)
+	if broadcast_target_label != null:
+		broadcast_target_label.visible = is_divination
+		if is_divination:
+			broadcast_target_label.position = Vector2(244.0, 0.0)
+			broadcast_target_label.size = Vector2(maxf(0.0, bombardment_banner.size.x - 252.0), bombardment_banner.size.y)
+			broadcast_target_label.text = "%s %s" % [world_broadcast_target_name, world_broadcast_message]
 	if has_avatar:
 		bombardment_banner_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 		bombardment_banner_label.position = Vector2(50.0, 0.0)
-		bombardment_banner_label.size = Vector2(maxf(0.0, bombardment_banner.size.x - 62.0), bombardment_banner.size.y)
+		bombardment_banner_label.size = Vector2(150.0 if is_divination else maxf(0.0, bombardment_banner.size.x - 62.0), bombardment_banner.size.y)
+		if not is_divination:
+			bombardment_banner_label.text = world_broadcast_message
 	else:
 		bombardment_banner_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		bombardment_banner_label.position = Vector2(12.0, 0.0)
@@ -1742,7 +1835,9 @@ func _layout_ui() -> void:
 		if card_draw_result_icon.visible:
 			_update_card_draw_countdown_label()
 	divination_overlay.size = viewport_size
-	var divination_size := _ui_panel_size("divination_panel_size", Vector2(620.0, 470.0), 0.88, 0.58)
+	# The authored divination art is square. Keep the panel and its background
+	# on one uniform scale so a short viewport never squashes the artwork.
+	var divination_size := _ui_square_panel_size("divination_panel_size", Vector2(620.0, 620.0), 0.88, 0.88)
 	var divination_width := divination_size.x
 	var divination_height := divination_size.y
 	divination_panel.size = divination_size
@@ -1763,7 +1858,7 @@ func _layout_ui() -> void:
 	intelligence_news_footer.size = Vector2(news_width - 48, 24)
 	if merchant_shop_overlay != null:
 		merchant_shop_overlay.size = viewport_size
-		var shop_size := _ui_panel_size("merchant_shop_panel_size", Vector2(660.0, 500.0), 0.94, 0.86)
+		var shop_size := _ui_square_panel_size("merchant_shop_panel_size", Vector2(660.0, 660.0), 0.94, 0.88)
 		merchant_shop_panel.size = shop_size
 		merchant_shop_panel.position = _centered_ui_position(shop_size, "merchant_shop_panel_offset")
 	if merchant_arrival_overlay != null:
@@ -2157,6 +2252,17 @@ func _ui_panel_size(property_name: String, fallback: Vector2, max_width_ratio: f
 		minf(desired.y, maxf(180.0, viewport_size.y * max_height_ratio))
 	)
 
+func _ui_square_panel_size(property_name: String, fallback: Vector2, max_width_ratio: float, max_height_ratio: float) -> Vector2:
+	var desired := fallback
+	if ui_config != null:
+		var value: Variant = ui_config.get(property_name)
+		if value is Vector2 and value.x > 0.0 and value.y > 0.0:
+			desired = value
+	var side := minf(desired.x, desired.y)
+	side = minf(side, maxf(240.0, viewport_size.x * max_width_ratio))
+	side = minf(side, maxf(240.0, viewport_size.y * max_height_ratio))
+	return Vector2(side, side)
+
 func _centered_ui_position(panel_size: Vector2, offset_property: String) -> Vector2:
 	var offset := Vector2.ZERO
 	if ui_config != null:
@@ -2187,7 +2293,7 @@ func update_state(time_left: float, player_gold: int, _ai_gold: int, player_hp: 
 		player_avatar.call("setup", Config.FACTION_PLAYER)
 		player_avatar.modulate = Color(0.48, 0.48, 0.48, 1.0) if player_eliminated else Color.WHITE
 	if player_name_label != null:
-		player_name_label.text = "Helios"
+		player_name_label.text = str(Config.FACTION_PLAYER_NAMES.get(Config.FACTION_PLAYER, "Helios"))
 	if barracks_count_label != null:
 		barracks_count_label.text = str(player_barracks)
 	if soldier_count_label != null:
@@ -2341,18 +2447,36 @@ func show_world_broadcast(message: String, duration: float = Config.INTELLIGENCE
 	world_broadcast_message = message
 	world_broadcast_remaining = maxf(0.0, duration)
 	world_broadcast_faction = -1
+	world_broadcast_name = ""
+	world_broadcast_target_faction = -1
+	world_broadcast_target_name = ""
+	_refresh_broadcast_banner()
+
+func show_divination_broadcast(source_faction: int, source_name: String, target_faction: int, target_name: String, result_description: String, duration: float = Config.INTELLIGENCE_BROADCAST_DURATION) -> void:
+	world_broadcast_message = result_description
+	world_broadcast_remaining = maxf(0.0, duration)
+	world_broadcast_faction = source_faction
+	world_broadcast_name = source_name
+	world_broadcast_target_faction = target_faction
+	world_broadcast_target_name = target_name
 	_refresh_broadcast_banner()
 
 func show_faction_elimination_broadcast(faction_name: String, faction: int, duration: float = Config.INTELLIGENCE_BROADCAST_DURATION) -> void:
 	world_broadcast_message = "%s已淘汰" % faction_name
 	world_broadcast_remaining = maxf(0.0, duration)
 	world_broadcast_faction = faction
+	world_broadcast_name = ""
+	world_broadcast_target_faction = -1
+	world_broadcast_target_name = ""
 	_refresh_broadcast_banner()
 
 func hide_world_broadcast() -> void:
 	world_broadcast_message = ""
 	world_broadcast_remaining = 0.0
 	world_broadcast_faction = -1
+	world_broadcast_name = ""
+	world_broadcast_target_faction = -1
+	world_broadcast_target_name = ""
 	_refresh_broadcast_banner()
 
 func play_divination_event(data: Dictionary) -> void:
@@ -2369,6 +2493,12 @@ func _start_next_divination_event() -> void:
 			divination_root.visible = false
 		if divination_overlay:
 			divination_overlay.visible = false
+		if divination_start_button:
+			divination_start_button.visible = false
+		if divination_bubble:
+			divination_bubble.visible = false
+		if divination_close_button:
+			divination_close_button.visible = false
 		return
 	divination_event_current = divination_event_queue.pop_front()
 	divination_event_running = true
@@ -2376,43 +2506,128 @@ func _start_next_divination_event() -> void:
 	if divination_root:
 		divination_root.visible = true
 	divination_overlay.visible = true
-	divination_title.text = "占卜屋"
-	divination_target.text = "目标选择中..."
+	divination_start_button.visible = true
+	divination_start_button.disabled = false
+	divination_bubble.visible = false
+	if divination_desktop_event_icons != null:
+		divination_desktop_event_icons.visible = false
+		divination_desktop_event_icons.modulate.a = 0.0
+	divination_close_button.visible = true
+	# The title is already part of the authored background artwork. Keep the
+	# programmatic title disabled to avoid drawing a duplicate over the art.
+	divination_title.text = ""
+	divination_target_text.text = ""
+	divination_target_text.visible = false
 	divination_target_display.clear_target()
 	divination_target_display.visible = false
-	divination_event_label.text = "等待目标确定"
-	divination_result.text = "请等待占卜结果"
+	divination_target_display.modulate.a = 0.0
+	divination_event_text.text = ""
+	divination_event_text.visible = false
+	if divination_result != null:
+		divination_result.text = ""
+		divination_result.visible = false
+	if divination_event_highlight != null:
+		divination_event_highlight.clear_active()
+	if divination_crystal_effect != null:
+		divination_crystal_effect.clear_effect()
 	if divination_event_tween != null and divination_event_tween.is_valid():
 		divination_event_tween.kill()
+	return
+
+func _on_divination_start_pressed() -> void:
+	if not divination_event_running or divination_event_tween != null and divination_event_tween.is_valid():
+		return
+	divination_start_button.visible = false
+	if divination_desktop_event_icons != null:
+		divination_desktop_event_icons.visible = true
+		divination_desktop_event_icons.modulate.a = 0.0
+		var icon_fade := create_tween()
+		icon_fade.tween_property(divination_desktop_event_icons, "modulate:a", 1.0, 0.65)
+	if divination_crystal_effect != null:
+		divination_crystal_effect.play_glow(0.65)
+	var target_type_name := str(divination_event_current.get("target_type_name", "未知目标"))
+	divination_target_text.text = ""
+	divination_target_text.visible = false
+	divination_target_display.clear_target()
+	divination_target_display.visible = false
+	divination_target_display.modulate.a = 0.0
 	divination_event_tween = create_tween()
-	divination_event_tween.tween_interval(0.08)
-	var target_names := ["地块最多的人", "地块最少的人", "金币最多的人", "金币最少的人", "随机一个敌人", "占卜者"]
-	var target_roll_steps := target_names.size() * 2
-	var target_step := maxf(0.035, (Config.FATE_DIVINATION_TARGET_ROLL_DURATION - 0.08) / float(target_roll_steps))
-	for index in range(target_roll_steps):
-		divination_event_tween.tween_callback(_show_divination_target_preview.bind(target_names[index % target_names.size()]))
-		divination_event_tween.tween_interval(target_step)
+	divination_event_tween.tween_interval(0.65)
+	divination_event_tween.tween_callback(_show_divination_bubble_and_target)
+	# Reveal the selected target condition one character at a time, then show
+	# the resolved player inside the crystal ball.
+	var character_count := target_type_name.length()
+	var character_step := Config.FATE_DIVINATION_TARGET_ROLL_DURATION / float(maxi(1, character_count))
+	for index in range(character_count):
+		divination_event_tween.tween_callback(_set_divination_target_text.bind(target_type_name.substr(0, index + 1)))
+		divination_event_tween.tween_interval(character_step)
 	divination_event_tween.tween_callback(_show_divination_target_result)
-	divination_event_tween.tween_interval(0.18)
+	divination_event_tween.tween_callback(_fade_in_divination_target_avatar)
+	divination_event_tween.tween_interval(0.42)
 	divination_event_tween.tween_callback(_start_divination_event_roll)
 
+func _show_divination_bubble_and_target() -> void:
+	if not divination_event_running:
+		return
+	divination_bubble.visible = true
+	divination_target_text.visible = true
+
+func _fade_in_divination_target_avatar() -> void:
+	if divination_target_display == null:
+		return
+	divination_target_display.modulate.a = 0.0
+	divination_target_display.visible = true
+	var avatar_fade := create_tween()
+	avatar_fade.tween_property(divination_target_display, "modulate:a", 1.0, 0.42)
+
+func _close_divination_ui() -> void:
+	if not divination_event_running:
+		return
+	var fate_cell: Vector2i = divination_event_current.get("fate_cell", Vector2i(999, 999))
+	if divination_event_tween != null and divination_event_tween.is_valid():
+		divination_event_tween.kill()
+	divination_event_queue.clear()
+	divination_event_current = {}
+	divination_event_running = false
+	divination_roll_emitted = false
+	if divination_root:
+		divination_root.visible = false
+	divination_overlay.visible = false
+	if divination_desktop_event_icons != null:
+		divination_desktop_event_icons.visible = false
+		divination_desktop_event_icons.modulate.a = 0.0
+	if divination_crystal_effect != null:
+		divination_crystal_effect.clear_effect()
+	divination_closed.emit(fate_cell)
+
 func _show_divination_target_preview(target_type_name: String) -> void:
-	divination_target.text = "%s：占卜中..." % target_type_name
+	# Kept as a compatibility hook for older callers; target text no longer
+	# scrolls during the new flow.
+	divination_target_text.text = target_type_name
+	divination_target_text.visible = true
+
+func _set_divination_target_text(text_value: String) -> void:
+	if not divination_event_running:
+		return
+	divination_target_text.text = text_value
+	divination_target_text.visible = true
 
 func _show_divination_target_result() -> void:
-	divination_target.text = "%s：已选中目标" % str(divination_event_current.get("target_type_name", "目标"))
+	divination_target_text.text = str(divination_event_current.get("target_type_name", "未知目标"))
+	divination_target_text.visible = true
 	if divination_target_display != null:
 		divination_target_display.set_target(int(divination_event_current.get("target", 0)), str(divination_event_current.get("target_name", "未知")))
-		divination_target_display.visible = true
+		divination_target_display.visible = false
+		divination_target_display.modulate.a = 0.0
 
 func _start_divination_event_roll() -> void:
 	if not divination_event_running:
 		return
-	divination_event_label.text = "占卜图标滚动中..."
+	divination_event_text.visible = false
 	# The target-selection tween is already running; start a fresh tween for
 	# the event roll because Godot does not allow appending to a started tween.
 	divination_event_tween = create_tween()
-	var roll_steps := 24
+	var roll_steps := 30
 	var interval_sum := 0.0
 	var intervals: Array[float] = []
 	for index in range(roll_steps):
@@ -2424,7 +2639,9 @@ func _start_divination_event_roll() -> void:
 		interval_sum += interval
 	var interval_scale := Config.FATE_DIVINATION_ROLL_DURATION / interval_sum
 	for index in range(roll_steps):
-		var icon_index := index % divination_event_icons.size()
+		# The highlight target is visual-only. Pick a fresh event icon for each
+		# rolling step; the actual event remains determined by main.gd.
+		var icon_index := randi_range(0, divination_event_icons.size() - 1)
 		if index == roll_steps - 1:
 			icon_index = int(divination_event_current.get("event_type", icon_index)) % divination_event_icons.size()
 		divination_event_tween.tween_callback(_show_divination_icon.bind(icon_index))
@@ -2432,41 +2649,67 @@ func _start_divination_event_roll() -> void:
 	divination_event_tween.tween_callback(_emit_divination_roll)
 
 func _show_divination_icon(active_index: int) -> void:
-	for index in range(divination_event_icons.size()):
-		var icon := divination_event_icons[index]
-		icon.add_theme_color_override("font_color", Color("#fbbf24") if index == active_index else Color("#c4b5fd"))
-		icon.scale = Vector2(1.12, 1.12) if index == active_index else Vector2.ONE
-	divination_event_label.text = "占卜图标滚动中..."
+	if divination_event_highlight == null:
+		return
+	if divination_event_highlight != null:
+		divination_event_highlight.set_active(active_index, false)
 
 func _emit_divination_roll() -> void:
 	if not divination_event_running or divination_roll_emitted:
 		return
 	divination_roll_emitted = true
-	divination_event_label.text = str(divination_event_current.get("event_name", "占卜结果"))
+	var result_index := int(divination_event_current.get("event_type", 0))
+	if divination_event_highlight != null:
+		divination_event_highlight.set_active(result_index, true)
+	divination_event_text.text = str(divination_event_current.get("event_name", "占卜结果"))
+	divination_event_text.visible = true
+	if divination_crystal_effect != null:
+		divination_crystal_effect.play_flash(1.0)
 	# Keep the final result visible briefly, then close the house before the
 	# main scene applies the result, broadcasts it, or moves the camera.
 	if divination_event_tween != null and divination_event_tween.is_valid():
 		divination_event_tween.kill()
 	divination_event_tween = create_tween()
-	divination_event_tween.tween_interval(Config.FATE_DIVINATION_RESULT_DURATION)
+	divination_event_tween.tween_interval(1.0)
 	divination_event_tween.tween_callback(_close_divination_before_result)
 
 func _close_divination_before_result() -> void:
 	if not divination_event_running:
 		return
+	# The result has already been shown in the bubble and the slow white flash
+	# has finished. Hide only the visuals; keep the pending event alive so main.gd
+	# can still resolve it and complete the normal camera/result flow.
+	_hide_divination_visuals()
+	divination_roll_finished.emit(divination_event_current.get("fate_cell", Vector2i(999, 999)))
+
+func _hide_divination_visuals() -> void:
 	if divination_root:
 		divination_root.visible = false
 	if divination_overlay:
 		divination_overlay.visible = false
-	divination_roll_finished.emit(divination_event_current.get("fate_cell", Vector2i(999, 999)))
+	if divination_start_button:
+		divination_start_button.visible = false
+	if divination_close_button:
+		divination_close_button.visible = false
+	if divination_desktop_event_icons:
+		divination_desktop_event_icons.visible = false
+		divination_desktop_event_icons.modulate.a = 0.0
+	if divination_crystal_effect:
+		divination_crystal_effect.clear_effect()
 
 func show_divination_result(message: String) -> void:
-	if divination_result:
-		divination_result.text = message
+	if divination_event_text:
+		divination_event_text.text = message
+		divination_event_text.visible = true
+	if divination_result != null:
+		divination_result.text = ""
+		divination_result.visible = false
 
 func finish_divination_event() -> void:
 	if divination_event_tween != null and divination_event_tween.is_valid():
 		divination_event_tween.kill()
+	if divination_event_highlight != null:
+		divination_event_highlight.clear_active()
 	divination_event_current = {}
 	divination_roll_emitted = false
 	divination_event_running = false
@@ -2475,6 +2718,8 @@ func finish_divination_event() -> void:
 func clear_divination_events() -> void:
 	if divination_event_tween != null and divination_event_tween.is_valid():
 		divination_event_tween.kill()
+	if divination_event_highlight != null:
+		divination_event_highlight.clear_active()
 	divination_event_queue.clear()
 	divination_event_current = {}
 	divination_roll_emitted = false
@@ -2483,42 +2728,84 @@ func clear_divination_events() -> void:
 		divination_root.visible = false
 	if divination_overlay:
 		divination_overlay.visible = false
+	if divination_start_button:
+		divination_start_button.visible = false
+	if divination_desktop_event_icons:
+		divination_desktop_event_icons.visible = false
+		divination_desktop_event_icons.modulate.a = 0.0
+	if divination_crystal_effect:
+		divination_crystal_effect.clear_effect()
 
 func show_result(message: String) -> void:
 	clear_camera_guides()
-	spectate_button.visible = false
-	restart_button.visible = true
-	watch_mode_button.visible = false
-	end_panel.visible = true
-	end_label.text = message
+	if spectate_button != null:
+		spectate_button.visible = false
+	if exit_game_button != null:
+		exit_game_button.visible = false
+	if restart_button != null:
+		restart_button.visible = true
+	if watch_mode_button != null:
+		watch_mode_button.visible = false
+	if end_panel != null:
+		end_panel.visible = true
+		end_panel.z_index = 120
+	if defeat_overlay != null:
+		defeat_overlay.visible = true
+	if end_label != null:
+		end_label.text = message
 
 func show_player_defeat_choice(message: String) -> void:
 	clear_camera_guides()
-	restart_button.visible = true
-	spectate_button.visible = true
-	watch_mode_button.visible = false
-	end_panel.visible = true
-	end_label.text = message
+	if restart_button != null:
+		restart_button.visible = false
+	if spectate_button != null:
+		spectate_button.visible = true
+	if exit_game_button != null:
+		exit_game_button.visible = true
+	if watch_mode_button != null:
+		watch_mode_button.visible = false
+	if end_panel != null:
+		end_panel.visible = true
+		end_panel.z_index = 120
+	if defeat_overlay != null:
+		defeat_overlay.visible = true
+	if end_label != null:
+		end_label.text = message
 
 func show_spectator_exit() -> void:
-	end_panel.visible = false
-	watch_mode_button.visible = true
+	if end_panel != null:
+		end_panel.visible = false
+	if defeat_overlay != null:
+		defeat_overlay.visible = false
+	if exit_game_button != null:
+		exit_game_button.visible = false
+	if watch_mode_button != null:
+		watch_mode_button.visible = true
+		watch_mode_button.z_index = 130
 
 func hide_spectator_controls() -> void:
-	watch_mode_button.visible = false
-	spectate_button.visible = false
+	if watch_mode_button != null:
+		watch_mode_button.visible = false
+	if spectate_button != null:
+		spectate_button.visible = false
+	if exit_game_button != null:
+		exit_game_button.visible = false
 
 func hide_result() -> void:
-	if end_panel:
+	if end_panel != null:
 		end_panel.visible = false
+	if defeat_overlay != null:
+		defeat_overlay.visible = false
+	if exit_game_button != null:
+		exit_game_button.visible = false
 
 func show_settlement(match_time: float, faction_rows: Array, player_row: Dictionary) -> void:
 	clear_camera_guides()
-	if end_panel != null:
-		end_panel.visible = false
-	if watch_mode_button != null:
-		watch_mode_button.visible = false
+	hide_result()
+	hide_spectator_controls()
 	if settlement_ui != null:
+		settlement_ui.z_index = 200
+		settlement_ui.visible = true
 		settlement_ui.call("show_settlement", match_time, faction_rows, player_row)
 
 func hide_settlement() -> void:
@@ -2539,6 +2826,9 @@ func _on_spectate_pressed() -> void:
 	clear_camera_guides()
 	if main_ref:
 		main_ref.continue_spectating()
+
+func _on_defeat_exit_pressed() -> void:
+	get_tree().quit()
 
 func _on_exit_spectator_pressed() -> void:
 	get_tree().quit()
@@ -2585,6 +2875,9 @@ func _apply_cartoon_buttons(root: Node) -> void:
 			continue
 		if child is Button:
 			var button := child as Button
+			if button == divination_start_button:
+				_apply_cartoon_buttons(child)
+				continue
 			var color := Art.SKY
 			if button.text.contains("丢弃") or button.text.contains("驱赶") or button.text.contains("退出"):
 				color = Color("#ff9b8f")

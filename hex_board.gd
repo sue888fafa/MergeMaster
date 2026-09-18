@@ -4,6 +4,7 @@ extends Node2D
 const BARRACKS_UPGRADE_HINT_TEXTURE := preload("res://assets/generated/effects/barracks_upgrade.png")
 
 const Config := preload("res://game_config.gd")
+const HeroAvatarCatalogScript := preload("res://hero_avatar_catalog.gd")
 const Art := preload("res://art_theme.gd")
 const MERCHANT_ART := preload("res://assets/generated/merchant.png")
 const HEADQUARTERS_ART := preload("res://assets/generated/base/headquarters.png")
@@ -110,6 +111,7 @@ var card_land_loss_cell := Vector2i(999, 999)
 var card_land_loss_elapsed := 0.0
 var card_drag_target_cell := Vector2i(999, 999)
 var card_drag_target_valid := false
+var card_drag_range_radius := 0
 var camera_focus_tween: Tween
 var cells_within_detection_range: Dictionary = {}
 var building_visual_dirty := true
@@ -205,8 +207,61 @@ func _assign_tile_types() -> void:
 	if candidates.is_empty():
 		return
 
+	# The player's starting area always contains one question tile, one visible
+	# mine and one visible wild-monster tile.  These cells are removed from the
+	# random pool below so they do not get assigned a second time.
+	var guaranteed_question_cell := Vector2i(-999999, -999999)
+	var guaranteed_mine_cell := Vector2i(-999999, -999999)
+	var guaranteed_monster_cell := Vector2i(-999999, -999999)
+	var player_start_candidates: Array[Vector2i] = []
+	for cell in neighbors(Config.PLAYER_HQ):
+		if candidates.has(cell):
+			player_start_candidates.append(cell)
+	player_start_candidates.shuffle()
+
+	# A normal board has six neighbours around the HQ.  Keep a fallback for
+	# smaller/custom maps so the guarantee does not make map generation fail.
+	var guarantee_cells: Array[Vector2i] = player_start_candidates.duplicate()
+	if guarantee_cells.size() < 3:
+		var fallback_candidates := candidates.duplicate()
+		fallback_candidates.shuffle()
+		for cell in fallback_candidates:
+			if not guarantee_cells.has(cell):
+				guarantee_cells.append(cell)
+				if guarantee_cells.size() >= 3:
+					break
+	if not guarantee_cells.is_empty():
+		guaranteed_question_cell = guarantee_cells[0]
+	if guarantee_cells.size() >= 2:
+		guaranteed_mine_cell = guarantee_cells[1]
+	if guarantee_cells.size() >= 3:
+		guaranteed_monster_cell = guarantee_cells[2]
+
+	var guaranteed_question_count := 1 if candidates.has(guaranteed_question_cell) else 0
+	var guaranteed_visible_count := 0
+	if candidates.has(guaranteed_mine_cell):
+		guaranteed_visible_count += 1
+	if candidates.has(guaranteed_monster_cell):
+		guaranteed_visible_count += 1
 	var question_count: int = clampi(roundi(float(candidates.size()) * Config.QUESTION_TILE_TYPE_WEIGHT), 2, candidates.size())
 	var visible_count: int = clampi(roundi(float(candidates.size()) * Config.VISIBLE_TILE_TYPE_WEIGHT), 0, candidates.size() - question_count)
+	question_count = maxi(0, question_count - guaranteed_question_count)
+	visible_count = maxi(0, visible_count - guaranteed_visible_count)
+
+	if guaranteed_question_count > 0:
+		tiles[guaranteed_question_cell]["tile_type"] = Config.QUESTION_TILE_TYPE
+		tiles[guaranteed_question_cell]["visible_tile_result"] = -1
+		candidates.erase(guaranteed_question_cell)
+	if candidates.has(guaranteed_mine_cell):
+		tiles[guaranteed_mine_cell]["tile_type"] = Config.VISIBLE_TILE_TYPE
+		tiles[guaranteed_mine_cell]["visible_tile_result"] = Config.VISIBLE_MINE
+		candidates.erase(guaranteed_mine_cell)
+	if candidates.has(guaranteed_monster_cell):
+		tiles[guaranteed_monster_cell]["tile_type"] = Config.VISIBLE_TILE_TYPE
+		tiles[guaranteed_monster_cell]["visible_tile_result"] = Config.VISIBLE_WILD_MONSTER
+		tiles[guaranteed_monster_cell]["visible_monster_level"] = _roll_visible_monster_level()
+		candidates.erase(guaranteed_monster_cell)
+
 	var forced_questions: Array[Vector2i] = []
 	for hq in HQ_CELLS:
 		var nearby: Array[Vector2i] = neighbors(hq)
@@ -550,21 +605,36 @@ func clear_card_land_loss_cell() -> void:
 	card_land_loss_elapsed = 0.0
 	card_drag_target_cell = Vector2i(999, 999)
 	card_drag_target_valid = false
+	card_drag_range_radius = 0
 	queue_redraw()
 
-func set_card_drag_target(cell: Vector2i, valid: bool) -> void:
-	if card_drag_target_cell == cell and card_drag_target_valid == valid:
+func set_card_drag_target(cell: Vector2i, valid: bool, range_radius: int = 0) -> void:
+	if card_drag_target_cell == cell and card_drag_target_valid == valid and card_drag_range_radius == range_radius:
 		return
 	card_drag_target_cell = cell
 	card_drag_target_valid = valid
+	card_drag_range_radius = maxi(0, range_radius)
 	queue_redraw()
 
 func clear_card_drag_target() -> void:
-	if card_drag_target_cell == Vector2i(999, 999) and not card_drag_target_valid:
+	if card_drag_target_cell == Vector2i(999, 999) and not card_drag_target_valid and card_drag_range_radius == 0:
 		return
 	card_drag_target_cell = Vector2i(999, 999)
 	card_drag_target_valid = false
+	card_drag_range_radius = 0
 	queue_redraw()
+
+func _draw_card_drag_range() -> void:
+	if card_drag_range_radius <= 0 or not tiles.has(card_drag_target_cell):
+		return
+	var range_color := Color("#60a5fa")
+	for cell in draw_cells:
+		if cell == card_drag_target_cell or cube_distance(cell, card_drag_target_cell) > card_drag_range_radius:
+			continue
+		var center := get_cell_world_center(cell)
+		var points := _hex_points(center, tile_size - 2.0)
+		draw_colored_polygon(points, Color(range_color.r, range_color.g, range_color.b, 0.12))
+		draw_polyline(_closed_polygon(points), Color(range_color.r, range_color.g, range_color.b, 0.65), 2.0, true)
 
 func reveal(cell: Vector2i, building: int, level: int = 1, unit_class: int = -1) -> void:
 	if not tiles.has(cell):
@@ -1064,6 +1134,7 @@ func _draw() -> void:
 		_draw_drag_source_preview(drag_start_cell)
 	if Config.DEBUG_DRAW_VISUAL_ANCHORS:
 		_draw_visual_anchor_debug()
+	_draw_card_drag_range()
 
 func _get_visible_world_rect() -> Rect2:
 	var viewport_rect := get_viewport().get_visible_rect()
@@ -1811,14 +1882,20 @@ func _draw_drag_source_preview(cell: Vector2i) -> void:
 
 func _draw_building(cell: Vector2i, center: Vector2, building: int, level: int, unit_class: int = -1) -> void:
 	if HQ_CELLS.has(cell):
+		# The HQ cell can be transferred to the destroyer after elimination,
+		# but its identity badge must remain associated with the original HQ
+		# faction so the defeated player's name and avatar stay visible.
+		var main_ref := get_parent()
 		var hq_owner := int(tiles.get(cell, {}).get("owner", UNKNOWN))
+		if main_ref != null and main_ref.has_method("get_hq_owner"):
+			hq_owner = int(main_ref.call("get_hq_owner", cell))
 		var hq_color := _faction_color(hq_owner, Color("#94a3b8"))
 		var hq_destroyed := false
-		var main_ref := get_parent()
 		if main_ref != null and main_ref.has_method("is_hq_destroyed"):
 			hq_destroyed = bool(main_ref.call("is_hq_destroyed", cell))
 		if hq_destroyed:
 			_draw_destroyed_hq(center, hq_color)
+			_draw_hq_identity(center, hq_owner, str(Config.FACTION_PLAYER_NAMES.get(hq_owner, Config.FACTION_NAMES.get(hq_owner, "阵营"))))
 			return
 		_draw_ellipse(center + Vector2(0.0, 17.0), Vector2(26.0, 7.0), Color(0.0, 0.0, 0.0, 0.38))
 		var headquarters_width := 88.0 * 0.80
@@ -1832,8 +1909,7 @@ func _draw_building(cell: Vector2i, center: Vector2, building: int, level: int, 
 			),
 			false
 		)
-		if hq_owner == PLAYER:
-			_draw_player_hq_identity(center, str(Config.FACTION_NAMES.get(hq_owner, "玩家")))
+		_draw_hq_identity(center, hq_owner, str(Config.FACTION_PLAYER_NAMES.get(hq_owner, Config.FACTION_NAMES.get(hq_owner, "阵营"))))
 		return
 
 	match building:
@@ -1888,25 +1964,32 @@ func _headquarters_art_for_faction(faction: int) -> Texture2D:
 	headquarters_art_cache[faction] = texture
 	return texture
 
-func _draw_player_hq_identity(center: Vector2, player_name: String) -> void:
-	# Keep the identity badge above the headquarters silhouette so its frame never
-	# covers the roof or other faction-identifying details.
+func _draw_hq_identity(center: Vector2, faction: int, player_name: String) -> void:
+	# All headquarters use the same identity badge treatment. The faction avatar
+	# and nickname are data-driven so robot HQs are visually consistent with the
+	# player's HQ without changing the headquarters artwork itself.
 	var badge_center := center + Vector2(0.0, -70.0)
-	var badge_width := 74.0
+	var badge_width := 104.0
 	var badge_height := 22.0
 	var badge_rect := Rect2(badge_center - Vector2(badge_width, badge_height) * 0.5, Vector2(badge_width, badge_height))
-	var faction_color := _faction_color(PLAYER, Color("#38bff2"))
+	var faction_color := _faction_color(faction, Color("#94a3b8"))
 	var panel_color := Color(0.04, 0.08, 0.14, 0.62)
 	var outline_color := Color(0.02, 0.04, 0.08, 0.78)
 	draw_style_box(_identity_badge_style(panel_color, outline_color), badge_rect)
-	var avatar_center := badge_center + Vector2(-25.0, 0.0)
-	draw_circle(avatar_center + Vector2(0.0, -3.0), 6.5, outline_color)
-	draw_circle(avatar_center + Vector2(0.0, -3.0), 4.7, faction_color.lightened(0.12))
-	draw_colored_polygon(PackedVector2Array([
-		avatar_center + Vector2(-7.0, 2.0), avatar_center + Vector2(7.0, 2.0),
-		avatar_center + Vector2(5.0, 7.0), avatar_center + Vector2(-5.0, 7.0)
-	]), faction_color.darkened(0.12))
-	draw_string(ThemeDB.fallback_font, badge_center + Vector2(-11.0, 4.5), player_name, HORIZONTAL_ALIGNMENT_LEFT, 48.0, 12, Color("#f8fafc"))
+	var avatar_size := Vector2(18.0, 18.0)
+	var avatar_rect := Rect2(badge_rect.position + Vector2(7.0, 2.0), avatar_size)
+	var avatar := HeroAvatarCatalogScript.get_for_faction(faction)
+	if avatar != null:
+		draw_texture_rect(avatar, avatar_rect, false)
+	else:
+		var avatar_center := avatar_rect.get_center()
+		draw_circle(avatar_center, 7.0, outline_color)
+		draw_circle(avatar_center, 5.0, faction_color.lightened(0.12))
+		draw_colored_polygon(PackedVector2Array([
+			avatar_center + Vector2(-7.0, 2.0), avatar_center + Vector2(7.0, 2.0),
+			avatar_center + Vector2(5.0, 7.0), avatar_center + Vector2(-5.0, 7.0)
+		]), faction_color.darkened(0.12))
+	draw_string(ThemeDB.fallback_font, badge_rect.position + Vector2(31.0, 16.0), player_name, HORIZONTAL_ALIGNMENT_LEFT, badge_width - 36.0, 12, Color("#f8fafc"))
 
 func _identity_badge_style(background: Color, outline: Color) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()

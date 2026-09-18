@@ -16,8 +16,8 @@ compatibility/default_parent_skeleton_in_mesh_instance_3d=true
 
 config/name="Hex Dominion"
 run/main_scene="res://Main.tscn"
-run/max_fps=60
 config/features=PackedStringArray("4.7")
+run/max_fps=60
 
 [display]
 

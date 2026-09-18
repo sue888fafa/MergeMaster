@@ -114,6 +114,9 @@ func _build_ui() -> void:
 	player_summary_panel.add_child(player_summary_tiles)
 	player_summary_icon = TileIconScript.new()
 	player_summary_panel.add_child(player_summary_icon)
+	# The ranking rows already contain the player's result; the separate
+	# summary panel is redundant in the compact settlement layout.
+	player_summary_panel.visible = false
 
 	confirm_button = Button.new()
 	confirm_button.text = "确定"
@@ -211,47 +214,51 @@ func set_viewport_size(value: Vector2) -> void:
 		return
 	dimmer.position = Vector2.ZERO
 	dimmer.size = viewport_size
-	var requested_size := ui_config.settlement_panel_size if ui_config != null else Vector2(680.0, 1140.0)
+	var requested_size := ui_config.settlement_panel_size if ui_config != null else Vector2(620.0, 620.0)
 	var board_width := minf(requested_size.x, maxf(300.0, viewport_size.x - 24.0))
-	var board_height := minf(requested_size.y, maxf(700.0, viewport_size.y - 24.0))
+	var board_height := minf(requested_size.y, maxf(560.0, viewport_size.y - 24.0))
 	board_panel.size = Vector2(board_width, board_height)
 	var panel_offset := ui_config.settlement_panel_offset if ui_config != null else Vector2.ZERO
 	board_panel.position = Vector2((viewport_size.x - board_width) * 0.5, (viewport_size.y - board_height) * 0.5) + panel_offset
 	header_art.position = Vector2(18.0, 8.0)
-	header_art.size = Vector2(board_width - 36.0, 202.0)
-	match_time_panel.position = Vector2(26.0, 214.0)
-	match_time_panel.size = Vector2(board_width - 52.0, 70.0)
+	header_art.size = Vector2(board_width - 36.0, 146.0)
+	match_time_panel.position = Vector2(26.0, 156.0)
+	match_time_panel.size = Vector2(board_width - 52.0, 56.0)
 	match_time_icon.position = Vector2(12.0, 4.0)
-	match_time_icon.size = Vector2(60.0, 60.0)
+	match_time_icon.size = Vector2(48.0, 48.0)
 	match_time_title.position = Vector2(82.0, 0.0)
-	match_time_title.size = Vector2(130.0, 70.0)
+	match_time_title.size = Vector2(130.0, 56.0)
 	match_time_label.position = Vector2(220.0, 0.0)
-	match_time_label.size = Vector2(board_width - 244.0, 70.0)
-	column_label.position = Vector2(26.0, 294.0)
-	column_label.size = Vector2(board_width - 52.0, 42.0)
+	match_time_label.size = Vector2(board_width - 244.0, 56.0)
+	column_label.position = Vector2(26.0, 222.0)
+	column_label.size = Vector2(board_width - 52.0, 34.0)
 	var row_width := board_width - 52.0
+	var visible_row_index := 0
 	for index in range(rows.size()):
 		var row := rows[index]
-		row.position = Vector2(26.0, 344.0 + float(index) * 78.0)
-		row.size = Vector2(row_width, 72.0)
-		row_rank_art[index].position = Vector2(12.0, 5.0)
-		row_rank_art[index].size = Vector2(60.0, 60.0)
-		row_rank_labels[index].position = Vector2(12.0, 5.0)
-		row_rank_labels[index].size = Vector2(60.0, 60.0)
-		row_avatar_art[index].position = Vector2(78.0, 5.0)
-		row_avatar_art[index].size = Vector2(62.0, 62.0)
-		row_avatar_placeholders[index].position = Vector2(78.0, 5.0)
-		row_avatar_placeholders[index].size = Vector2(62.0, 62.0)
+		if not row.visible:
+			continue
+		row.position = Vector2(26.0, 264.0 + float(visible_row_index) * 62.0)
+		row.size = Vector2(row_width, 56.0)
+		row_rank_art[index].position = Vector2(8.0, 3.0)
+		row_rank_art[index].size = Vector2(50.0, 50.0)
+		row_rank_labels[index].position = Vector2(8.0, 3.0)
+		row_rank_labels[index].size = Vector2(50.0, 50.0)
+		row_avatar_art[index].position = Vector2(66.0, 3.0)
+		row_avatar_art[index].size = Vector2(50.0, 50.0)
+		row_avatar_placeholders[index].position = Vector2(66.0, 3.0)
+		row_avatar_placeholders[index].size = Vector2(50.0, 50.0)
 		row_name_labels[index].position = Vector2(150.0, 0.0)
-		row_name_labels[index].size = Vector2(row_width * 0.34, 72.0)
+		row_name_labels[index].size = Vector2(row_width * 0.34, 56.0)
 		row_survival_labels[index].position = Vector2(row_width * 0.57, 0.0)
-		row_survival_labels[index].size = Vector2(row_width * 0.20, 72.0)
-		row_tile_icons[index].position = Vector2(row_width * 0.82, 13.0)
-		row_tile_icons[index].size = Vector2(42.0, 44.0)
+		row_survival_labels[index].size = Vector2(row_width * 0.20, 56.0)
+		row_tile_icons[index].position = Vector2(row_width * 0.82, 6.0)
+		row_tile_icons[index].size = Vector2(38.0, 40.0)
 		row_tile_labels[index].position = Vector2(row_width * 0.91, 0.0)
-		row_tile_labels[index].size = Vector2(row_width * 0.08, 72.0)
-	player_summary_panel.position = Vector2(26.0, 830.0)
-	player_summary_panel.size = Vector2(row_width, 82.0)
+		row_tile_labels[index].size = Vector2(row_width * 0.08, 56.0)
+		visible_row_index += 1
+	player_summary_panel.position = Vector2(26.0, 0.0)
+	player_summary_panel.size = Vector2(row_width, 0.0)
 	player_summary_title.position = Vector2(-2.0, -22.0)
 	player_summary_title.size = Vector2(110.0, 28.0)
 	player_summary_avatar.position = Vector2(82.0, 8.0)
@@ -264,12 +271,13 @@ func set_viewport_size(value: Vector2) -> void:
 	player_summary_icon.size = Vector2(42.0, 44.0)
 	player_summary_tiles.position = Vector2(row_width * 0.91, 0.0)
 	player_summary_tiles.size = Vector2(row_width * 0.08, 82.0)
-	var confirm_rect := ui_config.settlement_confirm_button_rect if ui_config != null else Rect2(0.0, 950.0, 180.0, 54.0)
+	var confirm_rect := ui_config.settlement_confirm_button_rect if ui_config != null else Rect2(0.0, 528.0, 180.0, 50.0)
 	confirm_button.position = Vector2((board_width - confirm_rect.size.x) * 0.5 + confirm_rect.position.x, minf(board_height - confirm_rect.size.y - 18.0, confirm_rect.position.y))
 	confirm_button.size = confirm_rect.size
 
 func _update_row(index: int, data: Dictionary) -> void:
 	var enabled := bool(data.get("enabled", false))
+	rows[index].visible = enabled
 	var rank := int(data.get("rank", 0))
 	var faction := int(data.get("faction", -1))
 	var color := Color("#d9dde4") if not enabled else Color(str(Config.FACTION_COLORS.get(faction, "#d9dde4")))

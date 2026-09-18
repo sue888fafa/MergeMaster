@@ -153,7 +153,9 @@ func _rank_factions(ids: Array[int], counts: Dictionary) -> Array[int]:
 	return ranked
 
 func _scale_for_rank(rank: int) -> float:
-	return _config_float("faction_stats_first_card_scale", 1.2) if rank == 0 else 1.0
+	# Keep the leader prominent while making the remaining ranking cards more
+	# compact so their content fits on narrow screens.
+	return _config_float("faction_stats_first_card_scale", 1.2) if rank == 0 else 0.8
 	queue_redraw()
 
 func _draw() -> void:
@@ -195,15 +197,29 @@ func _draw() -> void:
 			var authored_red: Dictionary = authored_cards["RedCard"]
 			var red_rect: Rect2 = authored_red.get("rect", Rect2())
 			configured_spacing = red_rect.position.x - authored_rect.position.x - configured_card_size.x
+	# Keep the three non-player ranking cards more tightly grouped.  The first
+	# card keeps its authored relationship to the ranking root; only the latter
+	# three cards use the additional 30% spacing reduction.
+	var leader_spacing := configured_spacing * 0.7
+	var compact_tail_spacing := leader_spacing * 0.4
 	var card_width := minf(configured_card_size.x, (size.x - configured_spacing * float(ranked.size() - 1)) / maxf(1.0, float(ranked.size())))
-	var step := card_width + configured_spacing
+	var leader_step := card_width + leader_spacing
+	var compact_tail_step := card_width + compact_tail_spacing
+	var compact_tail_right_offset := 8.0
 	var base_y := configured_card_size.y * 0.5
 	for rank in range(ranked.size()):
 		var faction := int(ranked[rank])
 		var eliminated := bool(displayed_eliminated_factions.get(faction, eliminated_factions.get(faction, false)))
 		var visual_slot := float(visual_slots.get(faction, rank))
 		var visual_scale := float(visual_scales.get(faction, _scale_for_rank(rank)))
-		var center := Vector2(card_width * 0.5 + visual_slot * step, base_y)
+		# Use the interpolated visual slot while rankings animate.  Checking the
+		# old rank here makes a card keep the old spacing step while it is moving
+		# into a new rank, which temporarily opens gaps between the cards.
+		var tail_start_step := leader_step + compact_tail_right_offset
+		var center_x := card_width * 0.5 + visual_slot * tail_start_step
+		if visual_slot > 1.0:
+			center_x = card_width * 0.5 + tail_start_step + (visual_slot - 1.0) * compact_tail_step
+		var center := Vector2(center_x, base_y)
 		_draw_ranked_card(center, faction, rank + 1, visual_scale, eliminated)
 		if eliminated:
 			draw_string(ThemeDB.fallback_font, center + Vector2(-30.0, 43.0), "已淘汰", HORIZONTAL_ALIGNMENT_LEFT, 60.0, 10, Color("#d1d5db"))
@@ -246,7 +262,7 @@ func _draw_ranked_card(center: Vector2, faction: int, rank: int, avatar_scale: f
 		var rank_size := _config_vector2("faction_stats_rank_icon_size", Vector2(34.0, 34.0))
 		var rank_offset := _config_vector2("faction_stats_rank_icon_offset", Vector2(-25.0, -29.0))
 		draw_texture_rect(rank_icon, Rect2(avatar_center + rank_offset * scale, rank_size * scale), false)
-	var name := str(Config.FACTION_NAMES.get(faction, "玩家"))
+	var name := str(Config.FACTION_PLAYER_NAMES.get(faction, Config.FACTION_NAMES.get(faction, "玩家")))
 	var name_color := Color("#9ca3af") if eliminated else Color("#ffffff")
 	var name_rect := _config_rect2("faction_stats_name_rect", Rect2(8.0, -7.0, 80.0, 20.0))
 	draw_string(
@@ -296,7 +312,7 @@ func _draw_authored_ranked_card(center: Vector2, faction: int, rank: int, color:
 		draw_texture_rect(rank_icon, _scaled_authored_rect(center, origin, rank_rect, visual_scale), false)
 	var name_data: Dictionary = card.get("Name", {})
 	var name_rect: Rect2 = name_data.get("rect", Rect2(43.0, 17.0, 39.0, 21.0))
-	draw_string(ThemeDB.fallback_font, _scaled_authored_point(center, origin + name_rect.position, visual_scale), str(Config.FACTION_NAMES.get(faction, "玩家")), HORIZONTAL_ALIGNMENT_CENTER, name_rect.size.x * visual_scale, roundi(_config_int("faction_stats_name_font_size", 12) * visual_scale), Color("#9ca3af") if eliminated else Color.WHITE)
+	draw_string(ThemeDB.fallback_font, _scaled_authored_point(center, origin + name_rect.position, visual_scale), str(Config.FACTION_PLAYER_NAMES.get(faction, Config.FACTION_NAMES.get(faction, "玩家"))), HORIZONTAL_ALIGNMENT_CENTER, name_rect.size.x * visual_scale, roundi(_config_int("faction_stats_name_font_size", 12) * visual_scale), Color("#9ca3af") if eliminated else Color.WHITE)
 	var tile_data: Dictionary = card.get("TileIcon", {})
 	var tile_rect: Rect2 = tile_data.get("rect", Rect2(36.0, 56.0, 45.0, 34.0))
 	var tile_texture: Texture2D = tile_data.get("texture", TILE_ART.get(faction, null))

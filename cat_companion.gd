@@ -481,7 +481,14 @@ func _draw_item_slots(reveal: float) -> void:
 			continue
 		var rect := _get_animated_slot_rect(index, card_reveal)
 		var center := rect.get_center()
-		if index != dragging_item_index and not (index == flying_item_index and not flying_item_id.is_empty()):
+		if index == dragging_item_index and not dragging_item_id.is_empty() and drag_started:
+			_draw_card_cancel_placeholder(
+				rect,
+				inventory_items[index],
+				0.72 * (slot_size / SLOT_SIZE) * clampf(card_reveal, 0.0, 1.0),
+				deg_to_rad(float(CARD_TILT_DEGREES[index]))
+			)
+		elif index != dragging_item_index and not (index == flying_item_index and not flying_item_id.is_empty()):
 			_draw_item_icon(center, inventory_items[index], 0.72 * (slot_size / SLOT_SIZE) * clampf(card_reveal, 0.0, 1.0), deg_to_rad(float(CARD_TILT_DEGREES[index])))
 	if not dragging_item_id.is_empty() and drag_started:
 		var dragging_local := get_global_transform_with_canvas().affine_inverse() * dragging_screen_position
@@ -531,6 +538,23 @@ func _wrap_item_hint(text: String) -> String:
 			line = line.substr(14)
 		lines.append(line)
 	return "\n".join(lines)
+
+func _draw_card_cancel_placeholder(rect: Rect2, item_id: String, scale: float, rotation := 0.0) -> void:
+	var card_art := MerchantCardIconScript.CARD_ART.get(item_id) as Texture2D
+	var card_width := 52.0
+	var card_height := 70.0
+	if card_art != null:
+		card_height = card_width * card_art.get_height() / maxf(1.0, card_art.get_width())
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.02, 0.05, 0.10, 0.70)
+	style.border_color = Color(0.98, 0.77, 0.25, 0.96)
+	style.set_border_width_all(2)
+	style.set_corner_radius_all(7)
+	draw_set_transform(rect.get_center(), rotation, Vector2(scale, scale))
+	draw_style_box(style, Rect2(-card_width * 0.5, -card_height * 0.5, card_width, card_height))
+	var font := ThemeDB.fallback_font
+	draw_string(font, Vector2(-card_width * 0.5, 5.0), "取消", HORIZONTAL_ALIGNMENT_CENTER, card_width, 14, Color(0.98, 0.98, 1.0, 0.96))
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 func _draw_item_icon(center: Vector2, item_id: String, scale: float, rotation := 0.0) -> void:
 	draw_set_transform(center, rotation, Vector2(scale, scale))
